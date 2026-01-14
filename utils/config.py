@@ -31,10 +31,14 @@ MSG_TYPE_FOLDER_FILE = "FOLDER_FILE"
 MSG_TYPE_FOLDER_END = "FOLDER_END"
 
 # 回應類型 (固定 8 bytes 避免 TCP 黏包)
-RESP_ACK = "ACK_____"      # 8 bytes
-RESP_SKIP = "SKIP____"     # 8 bytes
-RESP_ERROR = "ERROR___"    # 8 bytes
 RESP_LENGTH = 8            # 回應固定長度
+RESP_ACK = "ACK".ljust(RESP_LENGTH, '_')      # 發送用: "ACK_____"
+RESP_SKIP = "SKIP".ljust(RESP_LENGTH, '_')    # 發送用: "SKIP____"
+RESP_ERROR = "ERROR".ljust(RESP_LENGTH, '_')  # 發送用: "ERROR___"
+# 比對用 (去掉填充)
+RESP_ACK_STRIPPED = "ACK"
+RESP_SKIP_STRIPPED = "SKIP"
+RESP_ERROR_STRIPPED = "ERROR"
 
 # 取得本機資訊
 def get_hostname():

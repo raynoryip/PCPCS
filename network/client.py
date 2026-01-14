@@ -15,7 +15,7 @@ from utils.config import (
     TRANSFER_PORT, BUFFER_SIZE, FILE_CHUNK_SIZE,
     MSG_TYPE_TEXT, MSG_TYPE_FILE,
     MSG_TYPE_FOLDER_START, MSG_TYPE_FOLDER_FILE, MSG_TYPE_FOLDER_END,
-    RESP_ACK, RESP_SKIP, RESP_LENGTH,
+    RESP_ACK_STRIPPED, RESP_SKIP_STRIPPED, RESP_LENGTH,
     SOCKET_SEND_BUFFER, SOCKET_RECV_BUFFER,
     get_hostname, get_platform
 )
@@ -310,7 +310,7 @@ class TransferClient:
 
                 # 等待 ACK
                 response = self._recv_response(sock)
-                if response != RESP_ACK:
+                if response != RESP_ACK_STRIPPED:
                     raise Exception(f"FOLDER_START 未收到確認: {response}")
 
                 self._log(f"開始發送資料夾: {folder_name} ({total_files} 檔案, {total_size} bytes)")
@@ -349,7 +349,7 @@ class TransferClient:
                     # 等待回應（ACK 或 SKIP）
                     response = self._recv_response(sock)
 
-                    if response == RESP_SKIP:
+                    if response == RESP_SKIP_STRIPPED:
                         # 檔案已存在且 hash 相同，跳過
                         self._log(f"跳過 (已存在): {rel_path}")
                         sent_size += filesize
@@ -361,7 +361,7 @@ class TransferClient:
                             self.on_folder_progress(idx + 1, total_files, rel_path, 100, overall_progress, "skipped")
                         continue
 
-                    if response != RESP_ACK:
+                    if response != RESP_ACK_STRIPPED:
                         raise Exception(f"檔案 {rel_path} 未收到確認: {response}")
 
                     # 發送檔案內容
@@ -389,7 +389,7 @@ class TransferClient:
 
                     # 等待檔案傳輸確認
                     response = self._recv_response(sock)
-                    if response != RESP_ACK:
+                    if response != RESP_ACK_STRIPPED:
                         raise Exception(f"檔案 {rel_path} 傳輸確認失敗: {response}")
 
                     sent_size += filesize
@@ -414,7 +414,7 @@ class TransferClient:
                 response = self._recv_response(sock)
                 sock.close()
 
-                if response == RESP_ACK:
+                if response == RESP_ACK_STRIPPED:
                     self._log(f"資料夾傳輸完成: {folder_name}")
                     if self.on_complete:
                         self.on_complete(True, f"資料夾 {folder_name} 發送成功 ({total_files} 檔案)")
