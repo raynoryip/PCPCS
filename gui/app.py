@@ -148,6 +148,8 @@ LANG = {
         "solution_tcp_fail": "目標電腦的防火牆可能阻擋了 TCP 52526 端口，請在目標電腦上開放此端口",
         "issue_none": "未發現問題",
         "solution_none": "網路設定看起來正常。如果仍無法連接，請確認目標電腦也在運行 PCPCS。",
+        "copyright": "© 2025 Perspic AI Engineering Limited",
+        "website": "perspic.net",
     },
     "en": {
         "window_title": "PCPCS",
@@ -252,6 +254,8 @@ LANG = {
         "solution_tcp_fail": "The target's firewall may be blocking TCP 52526. Please open this port on the target computer",
         "issue_none": "No issues found",
         "solution_none": "Network settings look fine. If you still can't connect, make sure PCPCS is running on the target computer.",
+        "copyright": "© 2025 Perspic AI Engineering Limited",
+        "website": "perspic.net",
     }
 }
 
@@ -996,6 +1000,27 @@ class PCPCSApp:
             borderwidth=0, highlightthickness=0
         )
         self.log_text.pack(fill=tk.X, padx=2, pady=2)
+
+        # 版權資訊
+        copyright_frame = tk.Frame(right_frame, bg=COLORS["bg_light"])
+        copyright_frame.pack(fill=tk.X, pady=(10, 0))
+
+        copyright_text = f"{L('copyright')}  |  {L('website')}"
+        copyright_label = tk.Label(
+            copyright_frame,
+            text=copyright_text,
+            font=('Segoe UI', 8),
+            fg=COLORS["text_secondary"],
+            bg=COLORS["bg_light"],
+            cursor="hand2"
+        )
+        copyright_label.pack(anchor='e')
+        copyright_label.bind("<Button-1>", lambda e: self._open_website())
+
+    def _open_website(self):
+        """開啟 Perspic 網站"""
+        import webbrowser
+        webbrowser.open("https://perspic.net")
 
     def _switch_language(self):
         """切換語言並自動重啟"""
