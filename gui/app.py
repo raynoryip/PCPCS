@@ -968,54 +968,46 @@ class DiagnosticSystem:
     def get_quick_setup_guide(self) -> str:
         L = self.lang
 
-        def pad_line(text: str, width: int = 60) -> str:
-            """計算實際顯示寬度並填充空格 (中文字符佔2格)"""
-            display_len = 0
-            for char in text:
-                if ord(char) > 127:  # 非 ASCII 字符 (中文等)
-                    display_len += 2
-                else:
-                    display_len += 1
-            padding = width - display_len
-            if padding > 0:
-                return text + " " * padding
-            return text[:width]  # 截斷過長的文字
-
         lines = [
-            "╔══════════════════════════════════════════════════════════════╗",
-            f"║  {pad_line(L.get('quick_setup_guide'), 60)}║",
-            "╠══════════════════════════════════════════════════════════════╣",
-            f"║  {pad_line(L.get('local_info_label'), 60)}║",
-            f"║    {pad_line(L.get('computer_name') + ': ' + self.hostname, 58)}║",
-            f"║    {pad_line(L.get('ip_address') + ': ' + self.local_ip, 58)}║",
-            f"║    {pad_line(L.get('operating_system') + ': ' + self.system, 58)}║",
-            "╠══════════════════════════════════════════════════════════════╣",
-            f"║  {pad_line(L.get('ports_to_open'), 60)}║",
-            f"║    UDP 52525 - {pad_line(L.get('node_discovery'), 45)}║",
-            f"║    TCP 52526 - {pad_line(L.get('file_text_transfer'), 45)}║",
-            f"║    TCP 52530-52537 - {pad_line(L.get('parallel_ports'), 39)}║",
-            "╠══════════════════════════════════════════════════════════════╣",
+            "━" * 50,
+            f"  {L.get('quick_setup_guide')}",
+            "━" * 50,
+            "",
+            f"▸ {L.get('local_info_label')}",
+            f"    {L.get('computer_name')}: {self.hostname}",
+            f"    {L.get('ip_address')}: {self.local_ip}",
+            f"    {L.get('operating_system')}: {self.system}",
+            "",
+            f"▸ {L.get('ports_to_open')}",
+            f"    UDP 52525 - {L.get('node_discovery')}",
+            f"    TCP 52526 - {L.get('file_text_transfer')}",
+            f"    TCP 52530-52537 - {L.get('parallel_ports')}",
+            "",
         ]
 
         if self.system == "Linux":
             lines.extend([
-                f"║  {pad_line(L.get('linux_firewall'), 60)}║",
-                "║    sudo ufw allow 52525/udp                                  ║",
-                "║    sudo ufw allow 52526/tcp                                  ║",
-                "║    sudo ufw allow 52530:52537/tcp                            ║",
-                "╚══════════════════════════════════════════════════════════════╝",
+                f"▸ {L.get('linux_firewall')}",
+                "    sudo ufw allow 52525/udp",
+                "    sudo ufw allow 52526/tcp",
+                "    sudo ufw allow 52530:52537/tcp",
             ])
         elif self.system == "Windows":
             lines.extend([
-                f"║  {pad_line(L.get('windows_firewall'), 60)}║",
-                f"║    {pad_line(L.get('win_fw_step1'), 58)}║",
-                f"║    {pad_line(L.get('win_fw_step2'), 58)}║",
-                f"║    {pad_line(L.get('win_fw_step3'), 58)}║",
-                f"║    {pad_line('TCP 52530-52537 (' + L.get('parallel_ports') + ')', 58)}║",
-                "╚══════════════════════════════════════════════════════════════╝",
+                f"▸ {L.get('windows_firewall')}",
+                f"    {L.get('win_fw_step1')}",
+                f"    {L.get('win_fw_step2')}",
+                f"    {L.get('win_fw_step3')}",
+                f"    TCP 52530-52537 ({L.get('parallel_ports')})",
             ])
-        else:
-            lines.append("╚══════════════════════════════════════════════════════════════╝")
+        elif self.system == "Darwin":
+            lines.extend([
+                f"▸ {L.get('macos_firewall')}",
+                f"    {L.get('macos_fw_step1')}",
+                f"    {L.get('macos_fw_step2')}",
+            ])
+
+        lines.append("━" * 50)
 
         return "\n" + "\n".join(lines) + "\n"
 
