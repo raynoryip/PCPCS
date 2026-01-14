@@ -1,6 +1,7 @@
 # PCPCS 依賴
 #
-# 本專案僅使用 Python 標準庫，無需額外安裝套件
+# 可選套件 (增強 UI 體驗):
+Pillow>=9.0.0  # Logo 顯示，可選安裝
 #
 # 需要的標準庫:
 # - tkinter (GUI) - Linux 可能需要: sudo apt install python3-tk
