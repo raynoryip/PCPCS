@@ -1,7 +1,7 @@
 """
 PCPCS GUI 介面
 使用 Tkinter 實作跨平台圖形介面
-Modern UI with Perspic Blue Theme
+Modern Light Theme with Perspic Blue Accent
 """
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
@@ -32,22 +32,21 @@ from network.client import TransferClient
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "local_data")
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
 
-# Perspic 藍色主題色
+# Perspic 淺藍色主題 (白色為主，淺藍色為輔)
 COLORS = {
-    "primary": "#0088FF",          # 主藍色
-    "primary_dark": "#0066CC",     # 深藍色
-    "primary_light": "#00B4FF",    # 淺藍色
-    "accent": "#00D4FF",           # 強調色
-    "bg_dark": "#1a1a2e",          # 深色背景
-    "bg_medium": "#16213e",        # 中等背景
-    "bg_light": "#0f3460",         # 淺色背景
-    "text_primary": "#ffffff",     # 主要文字
-    "text_secondary": "#a0a0a0",   # 次要文字
-    "success": "#00c853",          # 成功綠
-    "warning": "#ffab00",          # 警告黃
-    "error": "#ff5252",            # 錯誤紅
-    "card_bg": "#1e2a4a",          # 卡片背景
-    "border": "#2a3f5f",           # 邊框色
+    "primary": "#0088FF",           # Perspic 主藍色
+    "primary_light": "#E3F2FD",     # 非常淺的藍色背景
+    "primary_hover": "#0066CC",     # 滑鼠懸停時的藍色
+    "bg_white": "#FFFFFF",          # 白色背景
+    "bg_light": "#F8FAFC",          # 淺灰白背景
+    "bg_card": "#FFFFFF",           # 卡片背景
+    "text_primary": "#1A1A2E",      # 主要文字 (深色)
+    "text_secondary": "#64748B",    # 次要文字 (灰色)
+    "border": "#E2E8F0",            # 邊框色
+    "success": "#10B981",           # 成功綠
+    "warning": "#F59E0B",           # 警告黃
+    "error": "#EF4444",             # 錯誤紅
+    "shadow": "#94A3B8",            # 陰影色
 }
 
 
@@ -76,19 +75,13 @@ class RecentConnections:
     def add_connection(self, ip: str, hostname: str, platform: str):
         """添加或更新連線記錄"""
         connections = self.load()
-
-        # 移除已存在的相同 IP
         connections = [c for c in connections if c.get("ip") != ip]
-
-        # 添加到最前面
         connections.insert(0, {
             "ip": ip,
             "hostname": hostname,
             "platform": platform,
             "last_connected": datetime.datetime.now().isoformat()
         })
-
-        # 只保留最近 20 個
         connections = connections[:20]
         self.save(connections)
 
@@ -160,7 +153,6 @@ class DiagnosticSystem:
         results = {
             "system_info": self._get_system_info(),
             "network_info": self._get_network_info(),
-            "network_type": self._check_network_type(),
             "port_status": self._check_ports(),
             "firewall_status": self._check_firewall(),
             "connectivity": None
@@ -188,7 +180,6 @@ class DiagnosticSystem:
 
     def _get_network_info(self) -> dict:
         """取得網路資訊"""
-        import socket
         info = {
             "local_ip": self.local_ip,
             "hostname": self.hostname,
@@ -213,14 +204,11 @@ class DiagnosticSystem:
     def _check_ports(self) -> dict:
         """檢查端口狀態"""
         import socket
-        import subprocess
         results = {
             "udp_52525": False,
             "tcp_52526": False,
-            "udp_52525_in_use": False,
-            "tcp_52526_in_use": False,
-            "udp_52525_process": None,
-            "tcp_52526_process": None
+            "udp_52525_note": "",
+            "tcp_52526_note": ""
         }
 
         # 檢查 UDP 52525
@@ -230,11 +218,9 @@ class DiagnosticSystem:
             sock.close()
             results["udp_52525"] = True
         except OSError as e:
-            err_str = str(e)
-            if "Address already in use" in err_str or "Only one usage" in err_str or "10048" in err_str:
+            if "Address already in use" in str(e) or "Only one usage" in str(e):
                 results["udp_52525"] = True
-                results["udp_52525_in_use"] = True
-                results["udp_52525_process"] = self._get_process_using_port(52525, "udp")
+                results["udp_52525_note"] = "PCPCS 正在監聽"
 
         # 檢查 TCP 52526
         try:
@@ -243,272 +229,11 @@ class DiagnosticSystem:
             sock.close()
             results["tcp_52526"] = True
         except OSError as e:
-            err_str = str(e)
-            if "Address already in use" in err_str or "Only one usage" in err_str or "10048" in err_str:
+            if "Address already in use" in str(e) or "Only one usage" in str(e):
                 results["tcp_52526"] = True
-                results["tcp_52526_in_use"] = True
-                results["tcp_52526_process"] = self._get_process_using_port(52526, "tcp")
+                results["tcp_52526_note"] = "PCPCS 正在監聽"
 
         return results
-
-    def _get_process_using_port(self, port: int, protocol: str) -> str:
-        """取得使用特定端口的進程名稱"""
-        import subprocess
-        try:
-            if self.system == "Windows":
-                proto_filter = "UDP" if protocol == "udp" else "TCP"
-                proc = subprocess.run(
-                    ["netstat", "-ano"],
-                    capture_output=True, text=True, timeout=10
-                )
-                for line in proc.stdout.split('\n'):
-                    if f":{port}" in line and proto_filter in line.upper():
-                        parts = line.split()
-                        if len(parts) >= 5:
-                            pid = parts[-1]
-                            task_proc = subprocess.run(
-                                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-                                capture_output=True, text=True, timeout=5
-                            )
-                            if task_proc.stdout.strip():
-                                process_name = task_proc.stdout.strip().split(',')[0].strip('"')
-                                return f"{process_name} (PID: {pid})"
-                return None
-            else:
-                try:
-                    proto_flag = "-u" if protocol == "udp" else "-t"
-                    proc = subprocess.run(
-                        ["ss", proto_flag, "-lpn", f"sport = :{port}"],
-                        capture_output=True, text=True, timeout=5
-                    )
-                    if proc.returncode == 0 and proc.stdout:
-                        import re
-                        match = re.search(r'users:\(\("([^"]+)",pid=(\d+)', proc.stdout)
-                        if match:
-                            return f"{match.group(1)} (PID: {match.group(2)})"
-                except:
-                    pass
-
-                try:
-                    proto_flag = "UDP" if protocol == "udp" else "TCP"
-                    proc = subprocess.run(
-                        ["lsof", "-i", f"{proto_flag}:{port}"],
-                        capture_output=True, text=True, timeout=5
-                    )
-                    if proc.returncode == 0 and proc.stdout:
-                        lines = proc.stdout.strip().split('\n')
-                        if len(lines) > 1:
-                            parts = lines[1].split()
-                            if len(parts) >= 2:
-                                return f"{parts[0]} (PID: {parts[1]})"
-                except:
-                    pass
-
-                return None
-        except Exception as e:
-            return None
-
-    def _check_network_type(self) -> dict:
-        """檢測網路類型 (公共/私人)"""
-        import subprocess
-        result = {
-            "is_public": False,
-            "network_name": "Unknown",
-            "warning": None
-        }
-
-        try:
-            if self.system == "Windows":
-                proc = subprocess.run(
-                    ["powershell", "-Command",
-                     "Get-NetConnectionProfile | Select-Object Name, NetworkCategory | ConvertTo-Json"],
-                    capture_output=True, text=True, timeout=10
-                )
-                if proc.returncode == 0 and proc.stdout.strip():
-                    try:
-                        profiles = json.loads(proc.stdout)
-                        if isinstance(profiles, dict):
-                            profiles = [profiles]
-                        for profile in profiles:
-                            name = profile.get("Name", "Unknown")
-                            category = profile.get("NetworkCategory", 0)
-                            if category == 0:
-                                result["is_public"] = True
-                                result["network_name"] = name
-                                result["warning"] = f"警告: 目前連接到公共網路 '{name}'！\n不建議在公共網路上使用 PCPCS。"
-                                break
-                            else:
-                                result["network_name"] = name
-                    except json.JSONDecodeError:
-                        pass
-
-            elif self.system == "Linux":
-                try:
-                    proc = subprocess.run(
-                        ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show", "--active"],
-                        capture_output=True, text=True, timeout=5
-                    )
-                    if proc.returncode == 0:
-                        for line in proc.stdout.strip().split('\n'):
-                            if line:
-                                parts = line.split(':')
-                                if len(parts) >= 2:
-                                    result["network_name"] = parts[0]
-                                    conn_type = parts[1].lower()
-                                    if "wifi" in conn_type or "wireless" in conn_type:
-                                        wifi_proc = subprocess.run(
-                                            ["nmcli", "-t", "-f", "SECURITY", "device", "wifi", "list"],
-                                            capture_output=True, text=True, timeout=5
-                                        )
-                                        if wifi_proc.returncode == 0:
-                                            for wifi_line in wifi_proc.stdout.split('\n'):
-                                                if not wifi_line.strip() or wifi_line.strip() == "--":
-                                                    result["is_public"] = True
-                                                    result["warning"] = "警告: 可能連接到開放的 WiFi 網路！"
-                                                    break
-                except:
-                    pass
-
-                local_ip = self.local_ip
-                if not (local_ip.startswith("10.") or local_ip.startswith("172.") or local_ip.startswith("192.168.")):
-                    result["is_public"] = True
-                    result["warning"] = "警告: IP 地址不在私有範圍內，可能是公共網路！"
-
-        except Exception as e:
-            result["error"] = str(e)
-
-        return result
-
-    def _detect_security_software(self) -> dict:
-        """檢測安裝的安全軟件/防火牆"""
-        import subprocess
-        result = {
-            "detected": [],
-            "firewall_provider": "Unknown"
-        }
-
-        security_software = {
-            "bdagent.exe": "Bitdefender",
-            "bdservicehost.exe": "Bitdefender",
-            "vsserv.exe": "Bitdefender",
-            "norton.exe": "Norton",
-            "ns.exe": "Norton",
-            "mcshield.exe": "McAfee",
-            "mcafee": "McAfee",
-            "avp.exe": "Kaspersky",
-            "kavtray.exe": "Kaspersky",
-            "ekrn.exe": "ESET",
-            "egui.exe": "ESET",
-            "avastui.exe": "Avast",
-            "avastsvc.exe": "Avast",
-            "avgui.exe": "AVG",
-            "avgsvc.exe": "AVG",
-            "cmdagent.exe": "Comodo",
-            "cis.exe": "Comodo",
-            "zonealarm.exe": "ZoneAlarm",
-            "vsmon.exe": "ZoneAlarm",
-            "mbam.exe": "Malwarebytes",
-            "mbamservice.exe": "Malwarebytes",
-            "sophosui.exe": "Sophos",
-            "savservice.exe": "Sophos",
-            "panda": "Panda",
-            "psanhost.exe": "Panda",
-            "f-secure": "F-Secure",
-            "fsgk32.exe": "F-Secure",
-            "dwengine.exe": "Dr.Web",
-            "spidergate.exe": "Dr.Web",
-            "360tray.exe": "360 Security",
-            "360sd.exe": "360 Security",
-        }
-
-        try:
-            if self.system == "Windows":
-                try:
-                    proc = subprocess.run(
-                        ["wmic", "/namespace:\\\\root\\SecurityCenter2", "path",
-                         "AntiVirusProduct", "get", "displayName"],
-                        capture_output=True, text=True, timeout=10
-                    )
-                    if proc.returncode == 0:
-                        lines = proc.stdout.strip().split('\n')
-                        for line in lines[1:]:
-                            name = line.strip()
-                            if name and name != "displayName":
-                                result["detected"].append(name)
-                                if result["firewall_provider"] == "Unknown":
-                                    result["firewall_provider"] = name
-                except:
-                    pass
-
-                try:
-                    proc = subprocess.run(
-                        ["wmic", "/namespace:\\\\root\\SecurityCenter2", "path",
-                         "FirewallProduct", "get", "displayName"],
-                        capture_output=True, text=True, timeout=10
-                    )
-                    if proc.returncode == 0:
-                        lines = proc.stdout.strip().split('\n')
-                        for line in lines[1:]:
-                            name = line.strip()
-                            if name and name != "displayName" and name not in result["detected"]:
-                                result["detected"].append(name)
-                except:
-                    pass
-
-                if not result["detected"]:
-                    try:
-                        proc = subprocess.run(
-                            ["tasklist", "/fo", "csv"],
-                            capture_output=True, text=True, timeout=10
-                        )
-                        processes = proc.stdout.lower()
-                        detected_names = set()
-                        for proc_name, display_name in security_software.items():
-                            if proc_name.lower() in processes:
-                                detected_names.add(display_name)
-                        result["detected"] = list(detected_names)
-                        if result["detected"]:
-                            result["firewall_provider"] = result["detected"][0]
-                    except:
-                        pass
-
-            elif self.system == "Linux":
-                try:
-                    proc = subprocess.run(["which", "ufw"], capture_output=True, timeout=5)
-                    if proc.returncode == 0:
-                        result["detected"].append("UFW (Uncomplicated Firewall)")
-                        result["firewall_provider"] = "UFW"
-                except:
-                    pass
-
-                try:
-                    proc = subprocess.run(["which", "firewalld"], capture_output=True, timeout=5)
-                    if proc.returncode == 0:
-                        result["detected"].append("firewalld")
-                        if result["firewall_provider"] == "Unknown":
-                            result["firewall_provider"] = "firewalld"
-                except:
-                    pass
-
-                try:
-                    proc = subprocess.run(["which", "clamscan"], capture_output=True, timeout=5)
-                    if proc.returncode == 0:
-                        result["detected"].append("ClamAV")
-                except:
-                    pass
-
-        except Exception as e:
-            result["error"] = str(e)
-
-        if not result["detected"]:
-            if self.system == "Windows":
-                result["detected"].append("Windows Defender")
-                result["firewall_provider"] = "Windows Defender"
-            elif self.system == "Linux":
-                result["detected"].append("iptables (系統內建)")
-                result["firewall_provider"] = "iptables"
-
-        return result
 
     def _check_firewall(self) -> dict:
         """檢查防火牆狀態"""
@@ -516,8 +241,7 @@ class DiagnosticSystem:
         result = {
             "status": "unknown",
             "details": "",
-            "pcpcs_allowed": "unknown",
-            "software": self._detect_security_software()
+            "pcpcs_allowed": "unknown"
         }
 
         try:
@@ -564,6 +288,7 @@ class DiagnosticSystem:
             "udp_52525": "unknown"
         }
 
+        # Ping 測試
         try:
             if self.system == "Windows":
                 cmd = ["ping", "-n", "1", "-w", "2000", target_ip]
@@ -580,6 +305,7 @@ class DiagnosticSystem:
         except:
             pass
 
+        # TCP 52526 測試
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(3)
@@ -595,82 +321,27 @@ class DiagnosticSystem:
         """根據診斷結果生成建議"""
         recommendations = []
 
-        network_type = results.get("network_type", {})
-        if network_type.get("is_public"):
-            recommendations.append({
-                "issue": "公共網路警告",
-                "solution": "您目前連接到公共網路，存在安全風險！",
-                "commands": [
-                    "建議:",
-                    "1. 避免在公共 WiFi (咖啡廳、機場等) 使用 PCPCS",
-                    "2. 如必須使用，請確保防火牆設定嚴格限制",
-                    "3. 只允許已知 IP 地址的連線",
-                    "4. 傳輸敏感檔案時請使用加密"
-                ]
-            })
-
         fw = results.get("firewall_status", {})
-        software = fw.get("software", {})
-        provider = software.get("firewall_provider", "Unknown")
-        detected = software.get("detected", [])
-
-        if self.system == "Windows":
-            third_party_guides = {
-                "Bitdefender": {
-                    "issue": f"檢測到 Bitdefender 防火牆",
-                    "solution": "在 Bitdefender 中設定 PCPCS 規則:",
-                    "commands": [
-                        "1. 開啟 Bitdefender → Protection → Firewall",
-                        "2. 點擊 Settings → Rules → Add Rule",
-                        "3. 新增規則允許 python.exe (或 pythonw.exe):",
-                        "   - Permission: Allow",
-                        "   - Network Type: Any",
-                        "   - Protocol: TCP + UDP",
-                        "   - Direction: Both (Inbound + Outbound)",
-                        "   - Local Port: 52525, 52526",
-                        "   - Remote Address: 不要限制 (留空或 Any)"
-                    ]
-                },
-                "Norton": {
-                    "issue": f"檢測到 Norton 防火牆",
-                    "solution": "在 Norton 中允許 PCPCS:",
-                    "commands": [
-                        "1. 開啟 Norton → Settings → Firewall",
-                        "2. 點擊 Program Control → Add",
-                        "3. 找到 python.exe 並設為 Allow",
-                        "4. 或在 Traffic Rules 中添加端口 52525/UDP 和 52526/TCP"
-                    ]
-                },
-                "Windows Defender": {
-                    "issue": "使用 Windows Defender 防火牆",
-                    "solution": "在 Windows Defender 中開放端口 (以管理員身份執行):",
-                    "commands": [
-                        'netsh advfirewall firewall add rule name="PCPCS UDP" dir=in action=allow protocol=UDP localport=52525',
-                        'netsh advfirewall firewall add rule name="PCPCS TCP" dir=in action=allow protocol=TCP localport=52526'
-                    ]
-                }
-            }
-
-            for sw in detected:
-                for key, guide in third_party_guides.items():
-                    if key.lower() in sw.lower():
-                        recommendations.append(guide)
-                        break
-
-            if not recommendations or (len(recommendations) == 1 and network_type.get("is_public")):
-                recommendations.append(third_party_guides.get("Windows Defender"))
-
-        elif self.system == "Linux":
+        if fw.get("status") == "enabled":
             if fw.get("pcpcs_allowed") == "no":
-                recommendations.append({
-                    "issue": "Linux UFW 防火牆未開放 PCPCS 端口",
-                    "solution": "執行以下命令開放端口:",
-                    "commands": [
-                        "sudo ufw allow 52525/udp comment 'PCPCS Discovery'",
-                        "sudo ufw allow 52526/tcp comment 'PCPCS Transfer'",
-                        "sudo ufw reload"
-                    ]
-                })
+                if self.system == "Linux":
+                    recommendations.append({
+                        "issue": "Linux 防火牆未開放 PCPCS 端口",
+                        "solution": "執行以下命令開放端口:",
+                        "commands": [
+                            "sudo ufw allow 52525/udp comment 'PCPCS Discovery'",
+                            "sudo ufw allow 52526/tcp comment 'PCPCS Transfer'"
+                        ]
+                    })
+                elif self.system == "Windows":
+                    recommendations.append({
+                        "issue": "Windows 防火牆可能阻擋連接",
+                        "solution": "在防火牆設定中允許 Python 或開放以下端口:",
+                        "commands": [
+                            "netsh advfirewall firewall add rule name=\"PCPCS UDP\" dir=in action=allow protocol=UDP localport=52525",
+                            "netsh advfirewall firewall add rule name=\"PCPCS TCP\" dir=in action=allow protocol=TCP localport=52526"
+                        ]
+                    })
 
         conn = results.get("connectivity", {})
         if conn:
@@ -678,20 +349,13 @@ class DiagnosticSystem:
                 recommendations.append({
                     "issue": "無法 Ping 到目標電腦",
                     "solution": "確認兩台電腦在同一個網段，並檢查目標電腦的防火牆是否允許 ICMP",
-                    "commands": [
-                        f"本機 IP: {self.local_ip}",
-                        "確認目標 IP 在同一網段 (如 192.168.1.x)"
-                    ]
+                    "commands": []
                 })
             elif conn.get("ping") and not conn.get("tcp_52526"):
                 recommendations.append({
                     "issue": "Ping 成功但 TCP 52526 連接失敗",
-                    "solution": f"目標電腦的 {provider} 防火牆可能阻擋了 TCP 52526 端口",
-                    "commands": [
-                        "請在目標電腦上:",
-                        "1. 確認 PCPCS 正在運行",
-                        "2. 檢查防火牆是否允許 TCP 52526 入站連線"
-                    ]
+                    "solution": "目標電腦的防火牆可能阻擋了 TCP 52526 端口，請在目標電腦上開放此端口",
+                    "commands": []
                 })
 
         if not recommendations:
@@ -717,28 +381,42 @@ class DiagnosticSystem:
 ║ 需要開放的端口:                                               ║
 ║   UDP 52525 - 節點發現                                        ║
 ║   TCP 52526 - 檔案/文字傳輸                                   ║
+╠══════════════════════════════════════════════════════════════╣
+"""
+        if self.system == "Linux":
+            guide += """║ Linux 防火牆設定:                                             ║
+║   sudo ufw allow 52525/udp                                    ║
+║   sudo ufw allow 52526/tcp                                    ║
 ╚══════════════════════════════════════════════════════════════╝
+"""
+        elif self.system == "Windows":
+            guide += """║ Windows 防火牆設定:                                           ║
+║   1. 開啟「Windows Defender 防火牆」                          ║
+║   2. 點擊「允許應用程式通過防火牆」                           ║
+║   3. 添加 Python 或開放 UDP 52525 和 TCP 52526                ║
+╚══════════════════════════════════════════════════════════════╝
+"""
+        else:
+            guide += """╚══════════════════════════════════════════════════════════════╝
 """
         return guide
 
 
 class PCPCSApp:
-    """PCPCS 主應用程式 - Modern UI"""
+    """PCPCS 主應用程式 - Modern Light Theme"""
 
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title(f"PCPCS - {get_hostname()}")
-        self.root.geometry("1100x750")
-        self.root.minsize(1000, 650)
-
-        # 設定深色背景
-        self.root.configure(bg=COLORS["bg_dark"])
+        self.root.title(f"PCPCS - {get_hostname()} ({get_local_ip()})")
+        self.root.geometry("1000x700")
+        self.root.minsize(900, 600)
+        self.root.configure(bg=COLORS["bg_light"])
 
         # 設定樣式
         self.style = ttk.Style()
         self._setup_styles()
 
-        # 載入 Logo
+        # Logo
         self.logo_image = None
         self._load_logo()
 
@@ -765,7 +443,7 @@ class PCPCSApp:
             on_complete=self._on_send_complete
         )
 
-        # 傳輸速度追蹤
+        # 傳輸追蹤
         self.transfer_start_time = None
         self.transfer_size = 0
 
@@ -789,8 +467,7 @@ class PCPCSApp:
             logo_path = os.path.join(ASSETS_DIR, "logo.png")
             if os.path.exists(logo_path):
                 img = Image.open(logo_path)
-                # 縮小 logo
-                img = img.resize((180, 135), Image.Resampling.LANCZOS)
+                img = img.resize((120, 90), Image.Resampling.LANCZOS)
                 self.logo_image = ImageTk.PhotoImage(img)
         except Exception as e:
             print(f"無法載入 Logo: {e}")
@@ -800,384 +477,326 @@ class PCPCSApp:
         """設定 Modern UI 樣式"""
         self.style.theme_use('clam')
 
-        # 主框架樣式
-        self.style.configure('Dark.TFrame', background=COLORS["bg_dark"])
-        self.style.configure('Card.TFrame', background=COLORS["card_bg"])
+        # 主框架
+        self.style.configure('Main.TFrame', background=COLORS["bg_light"])
+        self.style.configure('Card.TFrame', background=COLORS["bg_card"])
 
         # 標籤樣式
         self.style.configure('Title.TLabel',
-                           background=COLORS["bg_dark"],
+                           background=COLORS["bg_light"],
                            foreground=COLORS["text_primary"],
-                           font=('Segoe UI', 14, 'bold'))
+                           font=('Segoe UI', 12, 'bold'))
+
         self.style.configure('Subtitle.TLabel',
-                           background=COLORS["bg_dark"],
+                           background=COLORS["bg_light"],
                            foreground=COLORS["text_secondary"],
-                           font=('Segoe UI', 10))
+                           font=('Segoe UI', 9))
+
         self.style.configure('Card.TLabel',
-                           background=COLORS["card_bg"],
+                           background=COLORS["bg_card"],
                            foreground=COLORS["text_primary"],
                            font=('Segoe UI', 10))
+
         self.style.configure('CardTitle.TLabel',
-                           background=COLORS["card_bg"],
-                           foreground=COLORS["primary_light"],
-                           font=('Segoe UI', 11, 'bold'))
+                           background=COLORS["bg_card"],
+                           foreground=COLORS["primary"],
+                           font=('Segoe UI', 10, 'bold'))
+
         self.style.configure('Info.TLabel',
-                           background=COLORS["card_bg"],
+                           background=COLORS["bg_card"],
                            foreground=COLORS["text_secondary"],
                            font=('Consolas', 9))
 
-        # 按鈕樣式
-        self.style.configure('Accent.TButton',
-                           background=COLORS["primary"],
-                           foreground=COLORS["text_primary"],
-                           font=('Segoe UI', 10),
-                           padding=(15, 8))
-        self.style.map('Accent.TButton',
-                      background=[('active', COLORS["primary_light"]), ('pressed', COLORS["primary_dark"])])
-
-        self.style.configure('Secondary.TButton',
-                           background=COLORS["bg_light"],
-                           foreground=COLORS["text_primary"],
-                           font=('Segoe UI', 9),
-                           padding=(10, 5))
-        self.style.map('Secondary.TButton',
-                      background=[('active', COLORS["border"])])
-
         # LabelFrame 樣式
         self.style.configure('Card.TLabelframe',
-                           background=COLORS["card_bg"],
-                           foreground=COLORS["primary_light"],
-                           font=('Segoe UI', 10, 'bold'))
-        self.style.configure('Card.TLabelframe.Label',
-                           background=COLORS["card_bg"],
-                           foreground=COLORS["primary_light"],
-                           font=('Segoe UI', 10, 'bold'))
-
-        # Entry 樣式
-        self.style.configure('Modern.TEntry',
-                           fieldbackground=COLORS["bg_medium"],
+                           background=COLORS["bg_card"],
                            foreground=COLORS["text_primary"],
-                           insertcolor=COLORS["text_primary"],
-                           font=('Consolas', 11))
+                           borderwidth=1,
+                           relief='solid')
+        self.style.configure('Card.TLabelframe.Label',
+                           background=COLORS["bg_card"],
+                           foreground=COLORS["primary"],
+                           font=('Segoe UI', 10, 'bold'))
 
-        # Progressbar 樣式
+        # 按鈕樣式 - 主要藍色按鈕
+        self.style.configure('Primary.TButton',
+                           background=COLORS["primary"],
+                           foreground='white',
+                           font=('Segoe UI', 9, 'bold'),
+                           padding=(10, 5))
+        self.style.map('Primary.TButton',
+                      background=[('active', COLORS["primary_hover"]),
+                                ('pressed', COLORS["primary_hover"])])
+
+        # 次要按鈕
+        self.style.configure('Secondary.TButton',
+                           background=COLORS["bg_white"],
+                           foreground=COLORS["text_primary"],
+                           font=('Segoe UI', 9),
+                           padding=(8, 4),
+                           borderwidth=1)
+        self.style.map('Secondary.TButton',
+                      background=[('active', COLORS["primary_light"])])
+
+        # 進度條
         self.style.configure('Blue.Horizontal.TProgressbar',
                            background=COLORS["primary"],
-                           troughcolor=COLORS["bg_medium"])
+                           troughcolor=COLORS["border"])
+
+        # Entry
+        self.style.configure('Modern.TEntry',
+                           fieldbackground=COLORS["bg_white"],
+                           foreground=COLORS["text_primary"],
+                           padding=5)
 
     def _create_ui(self):
-        """建立 Modern 使用者介面"""
+        """建立使用者介面"""
         # 主框架
-        main_frame = tk.Frame(self.root, bg=COLORS["bg_dark"])
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
+        main_frame = ttk.Frame(self.root, padding="10", style='Main.TFrame')
+        main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # 左側 - Logo、節點列表和最近連線
-        left_frame = tk.Frame(main_frame, bg=COLORS["bg_dark"], width=300)
-        left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 15))
+        # 左側 - 節點列表和控制
+        left_frame = ttk.Frame(main_frame, width=280, style='Main.TFrame')
+        left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
         left_frame.pack_propagate(False)
 
         # Logo 區域
         if self.logo_image:
-            logo_label = tk.Label(left_frame, image=self.logo_image, bg=COLORS["bg_dark"])
+            logo_label = tk.Label(left_frame, image=self.logo_image, bg=COLORS["bg_light"])
             logo_label.pack(pady=(0, 10))
 
-        # 本機資訊卡片
-        info_card = tk.Frame(left_frame, bg=COLORS["card_bg"], relief='flat', bd=0)
-        info_card.pack(fill=tk.X, pady=(0, 10))
+        # 節點列表框
+        peer_frame = ttk.LabelFrame(left_frame, text="  已發現的電腦  ", padding="8", style='Card.TLabelframe')
+        peer_frame.pack(fill=tk.BOTH, expand=True)
 
-        # 內部 padding
-        info_inner = tk.Frame(info_card, bg=COLORS["card_bg"])
-        info_inner.pack(fill=tk.X, padx=12, pady=10)
+        # 使用 Canvas + Frame 實現圓角效果的列表
+        list_container = tk.Frame(peer_frame, bg=COLORS["bg_white"], highlightthickness=1,
+                                 highlightbackground=COLORS["border"])
+        list_container.pack(fill=tk.BOTH, expand=True)
 
-        tk.Label(info_inner, text="本機資訊", bg=COLORS["card_bg"],
-                fg=COLORS["primary_light"], font=('Segoe UI', 11, 'bold')).pack(anchor='w')
-        tk.Label(info_inner, text=f"名稱: {get_hostname()}", bg=COLORS["card_bg"],
-                fg=COLORS["text_secondary"], font=('Consolas', 9)).pack(anchor='w', pady=(5, 0))
-        tk.Label(info_inner, text=f"IP: {get_local_ip()}", bg=COLORS["card_bg"],
-                fg=COLORS["text_secondary"], font=('Consolas', 9)).pack(anchor='w')
-        tk.Label(info_inner, text="UDP: 52525 | TCP: 52526", bg=COLORS["card_bg"],
-                fg=COLORS["text_secondary"], font=('Consolas', 9)).pack(anchor='w')
-
-        # 已發現的電腦卡片
-        peer_card = tk.Frame(left_frame, bg=COLORS["card_bg"], relief='flat', bd=0)
-        peer_card.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-
-        peer_inner = tk.Frame(peer_card, bg=COLORS["card_bg"])
-        peer_inner.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
-
-        tk.Label(peer_inner, text="已發現的電腦", bg=COLORS["card_bg"],
-                fg=COLORS["primary_light"], font=('Segoe UI', 11, 'bold')).pack(anchor='w')
-
-        # 節點列表
         self.peer_listbox = tk.Listbox(
-            peer_inner,
-            font=('Consolas', 10),
-            bg=COLORS["bg_medium"],
-            fg=COLORS["text_primary"],
+            list_container,
+            font=('Consolas', 9),
             selectbackground=COLORS["primary"],
-            selectforeground=COLORS["text_primary"],
+            selectforeground='white',
+            bg=COLORS["bg_white"],
+            fg=COLORS["text_primary"],
+            borderwidth=0,
             highlightthickness=0,
-            bd=0,
-            relief='flat'
+            activestyle='none'
         )
-        self.peer_listbox.pack(fill=tk.BOTH, expand=True, pady=(8, 8))
+        self.peer_listbox.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
         self.peer_listbox.bind('<<ListboxSelect>>', self._on_peer_select)
 
-        # 按鈕區
-        btn_frame = tk.Frame(peer_inner, bg=COLORS["card_bg"])
-        btn_frame.pack(fill=tk.X)
+        # 按鈕框
+        btn_frame = ttk.Frame(peer_frame, style='Card.TFrame')
+        btn_frame.pack(fill=tk.X, pady=(8, 0))
 
         ttk.Button(btn_frame, text="重新掃描", command=self._refresh_peers,
-                  style='Secondary.TButton').pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(btn_frame, text="手動添加", command=self._manual_add_ip,
-                  style='Secondary.TButton').pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(btn_frame, text="診斷", command=self._show_diagnostic,
-                  style='Secondary.TButton').pack(side=tk.LEFT)
+                  style='Secondary.TButton').pack(fill=tk.X, pady=2)
+        ttk.Button(btn_frame, text="手動添加 IP", command=self._manual_add_ip,
+                  style='Secondary.TButton').pack(fill=tk.X, pady=2)
+        ttk.Button(btn_frame, text="測試連接", command=self._manual_ping,
+                  style='Secondary.TButton').pack(fill=tk.X, pady=2)
+        ttk.Button(btn_frame, text="網路診斷", command=self._show_diagnostic,
+                  style='Secondary.TButton').pack(fill=tk.X, pady=2)
 
-        # 最近連線卡片
-        recent_card = tk.Frame(left_frame, bg=COLORS["card_bg"], relief='flat', bd=0)
-        recent_card.pack(fill=tk.X)
+        # 最近連線
+        recent_frame = ttk.LabelFrame(left_frame, text="  最近連線  ", padding="8", style='Card.TLabelframe')
+        recent_frame.pack(fill=tk.X, pady=(10, 0))
 
-        recent_inner = tk.Frame(recent_card, bg=COLORS["card_bg"])
-        recent_inner.pack(fill=tk.X, padx=12, pady=10)
+        recent_container = tk.Frame(recent_frame, bg=COLORS["bg_white"], highlightthickness=1,
+                                   highlightbackground=COLORS["border"])
+        recent_container.pack(fill=tk.X)
 
-        recent_header = tk.Frame(recent_inner, bg=COLORS["card_bg"])
-        recent_header.pack(fill=tk.X)
-
-        tk.Label(recent_header, text="最近連線", bg=COLORS["card_bg"],
-                fg=COLORS["primary_light"], font=('Segoe UI', 11, 'bold')).pack(side=tk.LEFT)
-
-        # 最近連線列表
         self.recent_listbox = tk.Listbox(
-            recent_inner,
-            font=('Consolas', 9),
-            bg=COLORS["bg_medium"],
-            fg=COLORS["text_secondary"],
+            recent_container,
+            font=('Consolas', 8),
+            height=4,
             selectbackground=COLORS["primary"],
-            selectforeground=COLORS["text_primary"],
-            highlightthickness=0,
-            bd=0,
-            relief='flat',
-            height=4
+            selectforeground='white',
+            bg=COLORS["bg_white"],
+            fg=COLORS["text_secondary"],
+            borderwidth=0,
+            highlightthickness=0
         )
-        self.recent_listbox.pack(fill=tk.X, pady=(8, 0))
-        self.recent_listbox.bind('<<ListboxSelect>>', self._on_recent_select)
-        self.recent_listbox.bind('<Double-Button-1>', self._connect_recent)
+        self.recent_listbox.pack(fill=tk.X, padx=2, pady=2)
+        self.recent_listbox.bind('<Double-Button-1>', self._on_recent_double_click)
 
-        # 載入最近連線
-        self._load_recent_connections()
+        self._update_recent_list()
+
+        # 本機資訊
+        info_frame = ttk.LabelFrame(left_frame, text="  本機資訊  ", padding="8", style='Card.TLabelframe')
+        info_frame.pack(fill=tk.X, pady=(10, 0))
+
+        ttk.Label(info_frame, text=f"名稱: {get_hostname()}", style='Info.TLabel').pack(anchor='w')
+        ttk.Label(info_frame, text=f"IP: {get_local_ip()}", style='Info.TLabel').pack(anchor='w')
+        ttk.Label(info_frame, text=f"發現: UDP 52525", style='Info.TLabel').pack(anchor='w')
+        ttk.Label(info_frame, text=f"傳輸: TCP 52526", style='Info.TLabel').pack(anchor='w')
 
         # 右側 - 聊天和傳輸區
-        right_frame = tk.Frame(main_frame, bg=COLORS["bg_dark"])
+        right_frame = ttk.Frame(main_frame, style='Main.TFrame')
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-        # 對話對象顯示
-        target_frame = tk.Frame(right_frame, bg=COLORS["bg_dark"])
-        target_frame.pack(fill=tk.X, pady=(0, 10))
+        # 目標顯示
+        target_frame = ttk.Frame(right_frame, style='Main.TFrame')
+        target_frame.pack(fill=tk.X, pady=(0, 8))
 
-        tk.Label(target_frame, text="對話對象:", bg=COLORS["bg_dark"],
-                fg=COLORS["text_secondary"], font=('Segoe UI', 11)).pack(side=tk.LEFT)
-        self.target_label = tk.Label(target_frame, text="(請從左側選擇電腦)",
-                                    bg=COLORS["bg_dark"], fg=COLORS["primary_light"],
-                                    font=('Segoe UI', 12, 'bold'))
+        ttk.Label(target_frame, text="對話對象:", style='Title.TLabel').pack(side=tk.LEFT)
+        self.target_label = ttk.Label(target_frame, text="(請從左側選擇電腦)",
+                                     style='Subtitle.TLabel')
         self.target_label.pack(side=tk.LEFT, padx=(10, 0))
 
-        # 聊天對話卡片
-        chat_card = tk.Frame(right_frame, bg=COLORS["card_bg"], relief='flat', bd=0)
-        chat_card.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-
-        chat_inner = tk.Frame(chat_card, bg=COLORS["card_bg"])
-        chat_inner.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
-
-        chat_header = tk.Frame(chat_inner, bg=COLORS["card_bg"])
-        chat_header.pack(fill=tk.X)
-
-        tk.Label(chat_header, text="對話", bg=COLORS["card_bg"],
-                fg=COLORS["primary_light"], font=('Segoe UI', 11, 'bold')).pack(side=tk.LEFT)
-
-        ttk.Button(chat_header, text="清除記錄", command=self._clear_chat_history,
-                  style='Secondary.TButton').pack(side=tk.RIGHT)
+        # 聊天對話框
+        chat_frame = ttk.LabelFrame(right_frame, text="  對話  ", padding="8", style='Card.TLabelframe')
+        chat_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
 
         # 聊天記錄顯示區
+        chat_container = tk.Frame(chat_frame, bg=COLORS["bg_white"], highlightthickness=1,
+                                 highlightbackground=COLORS["border"])
+        chat_container.pack(fill=tk.BOTH, expand=True)
+
         self.chat_display = scrolledtext.ScrolledText(
-            chat_inner,
-            font=('Consolas', 10),
-            bg=COLORS["bg_medium"],
-            fg=COLORS["text_primary"],
-            insertbackground=COLORS["text_primary"],
-            state='disabled',
-            wrap=tk.WORD,
-            relief='flat',
-            bd=0
+            chat_container, height=15, font=('Consolas', 10),
+            state='disabled', wrap=tk.WORD,
+            bg=COLORS["bg_white"], fg=COLORS["text_primary"],
+            borderwidth=0, highlightthickness=0
         )
-        self.chat_display.pack(fill=tk.BOTH, expand=True, pady=(8, 8))
+        self.chat_display.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
 
         # 設定聊天顯示的標籤樣式
         self.chat_display.tag_configure('self', foreground=COLORS["success"], font=('Consolas', 10, 'bold'))
-        self.chat_display.tag_configure('peer', foreground=COLORS["primary_light"], font=('Consolas', 10, 'bold'))
+        self.chat_display.tag_configure('peer', foreground=COLORS["primary"], font=('Consolas', 10, 'bold'))
         self.chat_display.tag_configure('system', foreground=COLORS["text_secondary"], font=('Consolas', 9, 'italic'))
-        self.chat_display.tag_configure('file', foreground=COLORS["accent"], font=('Consolas', 10))
+        self.chat_display.tag_configure('file', foreground='#7C3AED', font=('Consolas', 10))
         self.chat_display.tag_configure('timestamp', foreground=COLORS["text_secondary"], font=('Consolas', 8))
 
         # 輸入區
-        input_frame = tk.Frame(chat_inner, bg=COLORS["card_bg"])
-        input_frame.pack(fill=tk.X)
+        input_frame = ttk.Frame(chat_frame, style='Card.TFrame')
+        input_frame.pack(fill=tk.X, pady=(8, 0))
+
+        input_container = tk.Frame(input_frame, bg=COLORS["bg_white"], highlightthickness=1,
+                                  highlightbackground=COLORS["border"])
+        input_container.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
 
         self.message_input = tk.Entry(
-            input_frame,
-            font=('Consolas', 11),
-            bg=COLORS["bg_medium"],
-            fg=COLORS["text_primary"],
-            insertbackground=COLORS["text_primary"],
-            relief='flat',
-            bd=0
+            input_container, font=('Segoe UI', 11),
+            bg=COLORS["bg_white"], fg=COLORS["text_primary"],
+            borderwidth=0, highlightthickness=0
         )
-        self.message_input.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10), ipady=8)
+        self.message_input.pack(fill=tk.X, padx=8, pady=6)
         self.message_input.bind('<Return>', lambda e: self._send_text())
 
         self.send_btn = ttk.Button(input_frame, text="發送", command=self._send_text,
-                                   style='Accent.TButton')
+                                  width=8, style='Primary.TButton')
         self.send_btn.pack(side=tk.LEFT)
 
-        # 檔案傳輸卡片
-        file_card = tk.Frame(right_frame, bg=COLORS["card_bg"], relief='flat', bd=0)
-        file_card.pack(fill=tk.X, pady=(0, 10))
+        # 聊天控制按鈕
+        chat_btn_frame = ttk.Frame(chat_frame, style='Card.TFrame')
+        chat_btn_frame.pack(fill=tk.X, pady=(8, 0))
 
-        file_inner = tk.Frame(file_card, bg=COLORS["card_bg"])
-        file_inner.pack(fill=tk.X, padx=12, pady=10)
+        ttk.Button(chat_btn_frame, text="清除記錄", command=self._clear_chat_history,
+                  style='Secondary.TButton').pack(side=tk.LEFT)
+        ttk.Button(chat_btn_frame, text="開啟記錄資料夾", command=self._open_data_folder,
+                  style='Secondary.TButton').pack(side=tk.LEFT, padx=8)
 
-        tk.Label(file_inner, text="檔案傳輸", bg=COLORS["card_bg"],
-                fg=COLORS["primary_light"], font=('Segoe UI', 11, 'bold')).pack(anchor='w')
+        # 檔案傳輸區
+        file_frame = ttk.LabelFrame(right_frame, text="  檔案傳輸  ", padding="8", style='Card.TLabelframe')
+        file_frame.pack(fill=tk.X, pady=(0, 10))
 
-        file_select_frame = tk.Frame(file_inner, bg=COLORS["card_bg"])
-        file_select_frame.pack(fill=tk.X, pady=(8, 0))
+        file_select_frame = ttk.Frame(file_frame, style='Card.TFrame')
+        file_select_frame.pack(fill=tk.X)
+
+        file_entry_container = tk.Frame(file_select_frame, bg=COLORS["bg_white"], highlightthickness=1,
+                                       highlightbackground=COLORS["border"])
+        file_entry_container.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
 
         self.file_path_var = tk.StringVar()
         self.file_entry = tk.Entry(
-            file_select_frame,
-            textvariable=self.file_path_var,
+            file_entry_container, textvariable=self.file_path_var,
             font=('Consolas', 10),
-            bg=COLORS["bg_medium"],
-            fg=COLORS["text_primary"],
-            insertbackground=COLORS["text_primary"],
-            relief='flat',
-            bd=0
+            bg=COLORS["bg_white"], fg=COLORS["text_primary"],
+            borderwidth=0, highlightthickness=0
         )
-        self.file_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10), ipady=6)
+        self.file_entry.pack(fill=tk.X, padx=6, pady=4)
 
         ttk.Button(file_select_frame, text="選擇", command=self._browse_file,
-                  style='Secondary.TButton').pack(side=tk.LEFT, padx=(0, 5))
-        self.send_file_btn = ttk.Button(file_select_frame, text="發送檔案",
-                                        command=self._send_file, style='Accent.TButton')
+                  style='Secondary.TButton').pack(side=tk.LEFT, padx=(0, 8))
+        self.send_file_btn = ttk.Button(file_select_frame, text="發送檔案", command=self._send_file,
+                                       style='Primary.TButton')
         self.send_file_btn.pack(side=tk.LEFT)
 
         # 進度條
-        progress_frame = tk.Frame(file_inner, bg=COLORS["card_bg"])
+        progress_frame = ttk.Frame(file_frame, style='Card.TFrame')
         progress_frame.pack(fill=tk.X, pady=(8, 0))
 
         self.progress_var = tk.DoubleVar()
-        self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var,
-                                            maximum=100, style='Blue.Horizontal.TProgressbar')
+        self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var, maximum=100,
+                                           style='Blue.Horizontal.TProgressbar')
         self.progress_bar.pack(fill=tk.X)
 
-        self.progress_label = tk.Label(progress_frame, text="", bg=COLORS["card_bg"],
-                                       fg=COLORS["text_secondary"], font=('Consolas', 9))
+        self.progress_label = ttk.Label(progress_frame, text="", style='Info.TLabel')
         self.progress_label.pack(anchor='w', pady=(4, 0))
 
         # 系統日誌
-        log_card = tk.Frame(right_frame, bg=COLORS["card_bg"], relief='flat', bd=0)
-        log_card.pack(fill=tk.X)
+        log_frame = ttk.LabelFrame(right_frame, text="  系統日誌  ", padding="8", style='Card.TLabelframe')
+        log_frame.pack(fill=tk.X)
 
-        log_inner = tk.Frame(log_card, bg=COLORS["card_bg"])
-        log_inner.pack(fill=tk.X, padx=12, pady=10)
-
-        tk.Label(log_inner, text="系統日誌", bg=COLORS["card_bg"],
-                fg=COLORS["primary_light"], font=('Segoe UI', 11, 'bold')).pack(anchor='w')
+        log_container = tk.Frame(log_frame, bg=COLORS["bg_white"], highlightthickness=1,
+                                highlightbackground=COLORS["border"])
+        log_container.pack(fill=tk.X)
 
         self.log_text = scrolledtext.ScrolledText(
-            log_inner,
-            height=4,
-            font=('Consolas', 9),
-            bg=COLORS["bg_medium"],
-            fg=COLORS["text_secondary"],
-            state='disabled',
-            relief='flat',
-            bd=0
+            log_container, height=4, font=('Consolas', 8),
+            state='disabled', wrap=tk.WORD,
+            bg=COLORS["bg_white"], fg=COLORS["text_secondary"],
+            borderwidth=0, highlightthickness=0
         )
-        self.log_text.pack(fill=tk.X, pady=(8, 0))
+        self.log_text.pack(fill=tk.X, padx=2, pady=2)
 
-    def _load_recent_connections(self):
-        """載入最近連線到列表"""
+    def _update_recent_list(self):
+        """更新最近連線列表"""
         self.recent_listbox.delete(0, tk.END)
-        connections = self.recent_connections.load()
-
-        for conn in connections:
-            ip = conn.get("ip", "")
+        for conn in self.recent_connections.load()[:5]:
             hostname = conn.get("hostname", "Unknown")
-            platform = conn.get("platform", "")
-            os_icon = "L" if "Linux" in platform else "W" if "Windows" in platform else "?"
-            display = f"[{os_icon}] {hostname} ({ip})"
-            self.recent_listbox.insert(tk.END, display)
+            ip = conn.get("ip", "")
+            self.recent_listbox.insert(tk.END, f"{hostname} ({ip})")
 
-    def _on_recent_select(self, event):
-        """選擇最近連線"""
-        pass  # 單擊只是選中，雙擊才連接
-
-    def _connect_recent(self, event):
-        """雙擊連接最近連線"""
+    def _on_recent_double_click(self, event):
+        """雙擊最近連線"""
         selection = self.recent_listbox.curselection()
         if selection:
             connections = self.recent_connections.load()
             if selection[0] < len(connections):
                 conn = connections[selection[0]]
-                ip = conn.get("ip", "")
-                hostname = conn.get("hostname", "")
-                platform = conn.get("platform", "Unknown")
+                ip = conn.get("ip")
+                hostname = conn.get("hostname")
+                platform_name = conn.get("platform", "Unknown")
 
-                # 添加到節點列表並選中
-                self._add_and_select_peer(ip, hostname, platform)
+                # 添加到 peers
+                if ip not in self.discovery.peers:
+                    peer = PeerInfo(ip, hostname, platform_name)
+                    self.discovery.peers[ip] = peer
+                    self._update_peer_list(self.discovery.peers)
 
-    def _add_and_select_peer(self, ip: str, hostname: str, platform: str):
-        """添加節點並選中"""
-        if ip not in self.discovery.peers:
-            peer = PeerInfo(ip, hostname, platform)
-            peer.is_reachable = True
-            self.discovery.peers[ip] = peer
-            self._update_peer_list(self.discovery.peers)
+                # 選擇這個 peer
+                self.selected_peer_ip = ip
+                self.selected_peer_name = hostname
+                self.target_label.config(text=f"{hostname} ({ip})")
+                self._load_chat_history()
 
-        # 選中這個節點
-        self.selected_peer_ip = ip
-        self.selected_peer_name = hostname
-        self.target_label.config(text=f"{hostname} ({ip})")
-        self._load_chat_history()
+                # 更新選擇狀態
+                for i in range(self.peer_listbox.size()):
+                    if ip in self.peer_listbox.get(i):
+                        self.peer_listbox.selection_clear(0, tk.END)
+                        self.peer_listbox.selection_set(i)
+                        break
 
-        # 在列表中選中
-        for i in range(self.peer_listbox.size()):
-            if ip in self.peer_listbox.get(i):
-                self.peer_listbox.selection_clear(0, tk.END)
-                self.peer_listbox.selection_set(i)
-                break
-
-        self._log(f"已連接: {hostname} ({ip})")
+                self._log(f"已選擇最近連線: {hostname}")
 
     def _on_peer_update(self, peers: dict):
         """節點列表更新回調"""
         self.root.after(0, lambda: self._update_peer_list(peers))
-
-    def _ensure_peer_exists(self, ip: str, hostname: str, platform: str):
-        """確保節點存在於列表中，如果不存在則自動添加"""
-        if ip not in self.discovery.peers:
-            new_peer = PeerInfo(ip, hostname, platform)
-            new_peer.is_reachable = True
-            self.discovery.peers[ip] = new_peer
-            self._log(f"自動添加節點: {hostname} ({ip})")
-            self._update_peer_list(self.discovery.peers)
-
-            # 同時添加到最近連線
-            self.recent_connections.add_connection(ip, hostname, platform)
-            self._load_recent_connections()
-        else:
-            self.discovery.peers[ip].last_seen = time.time()
 
     def _update_peer_list(self, peers: dict):
         """更新節點列表"""
@@ -1188,8 +807,8 @@ class PCPCSApp:
         for ip, peer in peers.items():
             status = "●" if peer.is_reachable else "○"
             ping_str = f"{peer.ping_ms:.0f}ms" if peer.ping_ms else "---"
-            os_icon = "L" if "Linux" in peer.platform else "W" if "Windows" in peer.platform else "?"
-            display = f"{status} [{os_icon}] {peer.hostname} ({ip}) [{ping_str}]"
+            os_icon = "🐧" if "Linux" in peer.platform else "🪟" if "Windows" in peer.platform else "🍎" if "Darwin" in peer.platform else "💻"
+            display = f"{status} {os_icon} {peer.hostname} ({ip}) [{ping_str}]"
             self.peer_listbox.insert(tk.END, display)
 
         if current_selection:
@@ -1207,7 +826,7 @@ class PCPCSApp:
             match = re.search(r'\((\d+\.\d+\.\d+\.\d+)\)', item)
             if match:
                 self.selected_peer_ip = match.group(1)
-                hostname_match = re.search(r'\]\s+(.+?)\s+\(', item)
+                hostname_match = re.search(r'[●○]\s+.\s+(.+?)\s+\(', item)
                 self.selected_peer_name = hostname_match.group(1) if hostname_match else self.selected_peer_ip
                 self.target_label.config(text=f"{self.selected_peer_name} ({self.selected_peer_ip})")
                 self._log(f"已選擇: {self.selected_peer_name}")
@@ -1218,10 +837,19 @@ class PCPCSApp:
                     peer = self.discovery.peers[self.selected_peer_ip]
                     self.recent_connections.add_connection(
                         self.selected_peer_ip,
-                        peer.hostname,
+                        self.selected_peer_name,
                         peer.platform
                     )
-                    self._load_recent_connections()
+                    self._update_recent_list()
+
+    def _ensure_peer_exists(self, sender_ip: str, sender_name: str, sender_platform: str):
+        """確保發送者存在於 peer 列表中"""
+        if sender_ip not in self.discovery.peers:
+            peer = PeerInfo(sender_ip, sender_name, sender_platform)
+            peer.is_reachable = True
+            self.discovery.peers[sender_ip] = peer
+            self.root.after(0, lambda: self._update_peer_list(self.discovery.peers))
+            self._log(f"自動添加節點: {sender_name} ({sender_ip})")
 
     def _load_chat_history(self):
         """載入並顯示聊天記錄"""
@@ -1289,7 +917,7 @@ class PCPCSApp:
             )
 
     def _clear_chat_history(self):
-        """清除聊天記錄 - 只清除對話，不移除節點"""
+        """清除聊天記錄"""
         if not self.selected_peer_ip:
             messagebox.showwarning("提示", "請先選擇一個對話對象")
             return
@@ -1306,22 +934,44 @@ class PCPCSApp:
             self.chat_display.config(state='disabled')
             self._log("聊天記錄已清除")
 
-    def _refresh_peers(self):
-        """重新掃描節點 - 不清除最近連線"""
-        self._log("正在重新掃描網路...")
-        # 保存當前選擇
-        current_selection = self.selected_peer_ip
+    def _open_data_folder(self):
+        """開啟本地數據資料夾"""
+        os.makedirs(DATA_DIR, exist_ok=True)
+        import platform
+        import subprocess
 
-        # 清除發現的節點
+        if platform.system() == "Windows":
+            os.startfile(DATA_DIR)
+        elif platform.system() == "Darwin":
+            subprocess.run(["open", DATA_DIR])
+        else:
+            subprocess.run(["xdg-open", DATA_DIR])
+
+    def _refresh_peers(self):
+        """重新掃描節點"""
+        self._log("正在重新掃描網路...")
         self.discovery.peers.clear()
         self._update_peer_list({})
 
-        # 恢復選擇狀態
-        if current_selection:
-            self.selected_peer_ip = current_selection
+    def _manual_ping(self):
+        """手動 Ping 選中的節點"""
+        if not self.selected_peer_ip:
+            messagebox.showwarning("提示", "請先選擇一個目標電腦")
+            return
+
+        self._log(f"正在 Ping {self.selected_peer_ip}...")
+
+        def do_ping():
+            result = self.discovery.manual_ping(self.selected_peer_ip)
+            if result:
+                self._log(f"Ping {self.selected_peer_ip}: {result:.1f}ms - 連接正常")
+            else:
+                self._log(f"Ping {self.selected_peer_ip}: 無回應")
+
+        threading.Thread(target=do_ping, daemon=True).start()
 
     def _manual_add_ip(self):
-        """手動添加 IP 地址 - 自動建立連線"""
+        """手動添加 IP 地址"""
         ip = simpledialog.askstring("手動添加 IP", "請輸入目標電腦的 IP 地址:", parent=self.root)
 
         if ip and ip.strip():
@@ -1330,10 +980,10 @@ class PCPCSApp:
 
             def try_connect():
                 ping_result = self.discovery.manual_ping(ip)
-                hostname = f"PC-{ip.split('.')[-1]}"
-                platform = "Unknown"
+                hostname = f"Manual-{ip}"
+                platform_name = "Unknown"
 
-                peer = PeerInfo(ip, hostname, platform)
+                peer = PeerInfo(ip, hostname, platform_name)
                 peer.ping_ms = ping_result
                 peer.is_reachable = ping_result is not None
                 self.discovery.peers[ip] = peer
@@ -1341,17 +991,24 @@ class PCPCSApp:
                 if ping_result:
                     self._log(f"成功添加 {ip} (Ping: {ping_result:.1f}ms)")
                 else:
-                    self._log(f"已添加 {ip} (無法 Ping，但仍可嘗試連接)")
+                    self._log(f"已添加 {ip} (無法 Ping)")
 
-                # 更新 UI
-                self.root.after(0, lambda: self._update_peer_list(self.discovery.peers))
+                # 自動選擇這個 peer
+                def select_peer():
+                    self._update_peer_list(self.discovery.peers)
+                    self.selected_peer_ip = ip
+                    self.selected_peer_name = hostname
+                    self.target_label.config(text=f"{hostname} ({ip})")
+                    self._load_chat_history()
 
-                # 保存到最近連線
-                self.recent_connections.add_connection(ip, hostname, platform)
-                self.root.after(0, self._load_recent_connections)
+                    # 更新選擇狀態
+                    for i in range(self.peer_listbox.size()):
+                        if ip in self.peer_listbox.get(i):
+                            self.peer_listbox.selection_clear(0, tk.END)
+                            self.peer_listbox.selection_set(i)
+                            break
 
-                # 自動選中這個節點
-                self.root.after(100, lambda: self._add_and_select_peer(ip, hostname, platform))
+                self.root.after(0, select_peer)
 
             threading.Thread(target=try_connect, daemon=True).start()
 
@@ -1361,21 +1018,25 @@ class PCPCSApp:
         diag_window.title("網路診斷")
         diag_window.geometry("700x550")
         diag_window.transient(self.root)
-        diag_window.configure(bg=COLORS["bg_dark"])
+        diag_window.configure(bg=COLORS["bg_light"])
+
+        # 診斷結果顯示
+        result_container = tk.Frame(diag_window, bg=COLORS["bg_white"], highlightthickness=1,
+                                   highlightbackground=COLORS["border"])
+        result_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         result_text = scrolledtext.ScrolledText(
-            diag_window,
-            font=('Consolas', 10),
-            bg=COLORS["bg_medium"],
-            fg=COLORS["text_primary"]
+            result_container, font=('Consolas', 10),
+            bg=COLORS["bg_white"], fg=COLORS["text_primary"],
+            borderwidth=0, highlightthickness=0
         )
-        result_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        result_text.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
 
         guide = self.diagnostic.get_quick_setup_guide()
         result_text.insert(tk.END, guide)
         result_text.insert(tk.END, "\n\n正在執行診斷...\n")
 
-        btn_frame = tk.Frame(diag_window, bg=COLORS["bg_dark"])
+        btn_frame = ttk.Frame(diag_window, style='Main.TFrame')
         btn_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
 
         def run_diagnostic():
@@ -1394,65 +1055,35 @@ class PCPCSApp:
                 result_text.insert(tk.END, "診斷結果:\n")
                 result_text.insert(tk.END, "=" * 60 + "\n\n")
 
-                network_type = results.get("network_type", {})
-                if network_type.get("is_public"):
-                    result_text.insert(tk.END, "⚠ " + "=" * 56 + " ⚠\n")
-                    result_text.insert(tk.END, f"  {network_type.get('warning', '警告: 公共網路!')}\n")
-                    result_text.insert(tk.END, "⚠ " + "=" * 56 + " ⚠\n\n")
-                else:
-                    network_name = network_type.get("network_name", "Unknown")
-                    result_text.insert(tk.END, f"網路: {network_name} (私人網路)\n")
-
                 sys_info = results.get("system_info", {})
-                result_text.insert(tk.END, f"作業系統: {sys_info.get('os', 'Unknown')}\n")
-
-                fw = results.get("firewall_status", {})
-                software = fw.get("software", {})
-                detected = software.get("detected", [])
-                provider = software.get("firewall_provider", "Unknown")
-
-                result_text.insert(tk.END, f"\n安全軟件/防火牆:\n")
-                for sw in detected:
-                    result_text.insert(tk.END, f"  * {sw}\n")
-                result_text.insert(tk.END, f"  主要防火牆: {provider}\n")
+                result_text.insert(tk.END, f"作業系統: {sys_info.get('os', 'Unknown')} {sys_info.get('os_version', '')[:30]}\n")
 
                 ports = results.get("port_status", {})
                 result_text.insert(tk.END, f"\n端口狀態:\n")
+                udp_status = '✓ 可用' if ports.get('udp_52525') else '✗ 不可用'
+                tcp_status = '✓ 可用' if ports.get('tcp_52526') else '✗ 不可用'
+                udp_note = f" ({ports.get('udp_52525_note', '')})" if ports.get('udp_52525_note') else ""
+                tcp_note = f" ({ports.get('tcp_52526_note', '')})" if ports.get('tcp_52526_note') else ""
+                result_text.insert(tk.END, f"  UDP 52525: {udp_status}{udp_note}\n")
+                result_text.insert(tk.END, f"  TCP 52526: {tcp_status}{tcp_note}\n")
 
-                udp_in_use = ports.get('udp_52525_in_use', False)
-                udp_process = ports.get('udp_52525_process')
-                if udp_in_use:
-                    if udp_process:
-                        result_text.insert(tk.END, f"  UDP 52525: 使用中 - {udp_process}\n")
-                    else:
-                        result_text.insert(tk.END, f"  UDP 52525: 使用中 (PCPCS)\n")
-                else:
-                    result_text.insert(tk.END, f"  UDP 52525: 可用\n")
-
-                tcp_in_use = ports.get('tcp_52526_in_use', False)
-                tcp_process = ports.get('tcp_52526_process')
-                if tcp_in_use:
-                    if tcp_process:
-                        result_text.insert(tk.END, f"  TCP 52526: 使用中 - {tcp_process}\n")
-                    else:
-                        result_text.insert(tk.END, f"  TCP 52526: 使用中 (PCPCS)\n")
-                else:
-                    result_text.insert(tk.END, f"  TCP 52526: 可用\n")
+                fw = results.get("firewall_status", {})
+                result_text.insert(tk.END, f"\n防火牆: {fw.get('status', 'unknown')}\n")
 
                 conn = results.get("connectivity")
                 if conn:
                     result_text.insert(tk.END, f"\n連接測試 ({target}):\n")
-                    result_text.insert(tk.END, f"  Ping: {'成功' if conn.get('ping') else '失敗'}")
+                    result_text.insert(tk.END, f"  Ping: {'✓ 成功' if conn.get('ping') else '✗ 失敗'}")
                     if conn.get('ping_ms'):
                         result_text.insert(tk.END, f" ({conn['ping_ms']:.1f}ms)")
-                    result_text.insert(tk.END, f"\n  TCP 52526: {'連通' if conn.get('tcp_52526') else '不通'}\n")
+                    result_text.insert(tk.END, f"\n  TCP 52526: {'✓ 連通' if conn.get('tcp_52526') else '✗ 不通'}\n")
 
                 result_text.insert(tk.END, "\n" + "=" * 60 + "\n")
                 result_text.insert(tk.END, "建議:\n")
                 result_text.insert(tk.END, "=" * 60 + "\n\n")
 
                 for rec in results.get("recommendations", []):
-                    result_text.insert(tk.END, f"* {rec['issue']}\n")
+                    result_text.insert(tk.END, f"● {rec['issue']}\n")
                     result_text.insert(tk.END, f"  {rec['solution']}\n")
                     for cmd in rec.get("commands", []):
                         result_text.insert(tk.END, f"    $ {cmd}\n")
@@ -1467,10 +1098,19 @@ class PCPCSApp:
 
         ttk.Button(btn_frame, text="重新診斷", command=run_diagnostic,
                   style='Secondary.TButton').pack(side=tk.LEFT)
+        ttk.Button(btn_frame, text="複製資訊",
+                  command=lambda: self._copy_to_clipboard(result_text.get('1.0', tk.END)),
+                  style='Secondary.TButton').pack(side=tk.LEFT, padx=8)
         ttk.Button(btn_frame, text="關閉", command=diag_window.destroy,
-                  style='Secondary.TButton').pack(side=tk.RIGHT)
+                  style='Primary.TButton').pack(side=tk.RIGHT)
 
         diag_window.after(100, run_diagnostic)
+
+    def _copy_to_clipboard(self, text):
+        """複製到剪貼簿"""
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        messagebox.showinfo("提示", "已複製到剪貼簿")
 
     def _browse_file(self):
         """選擇檔案"""
@@ -1576,6 +1216,7 @@ class PCPCSApp:
 
     def _handle_text_received(self, sender_ip: str, sender_name: str, text: str, sender_platform: str = "Unknown"):
         """處理收到的文字"""
+        # 確保發送者在 peer 列表中
         self._ensure_peer_exists(sender_ip, sender_name, sender_platform)
 
         if self.selected_peer_ip == sender_ip:
@@ -1599,6 +1240,7 @@ class PCPCSApp:
 
     def _handle_file_received(self, sender_ip: str, sender_name: str, filepath: str, filesize: int, sender_platform: str = "Unknown"):
         """處理收到的檔案"""
+        # 確保發送者在 peer 列表中
         self._ensure_peer_exists(sender_ip, sender_name, sender_platform)
 
         filename = os.path.basename(filepath)
