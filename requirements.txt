@@ -1,0 +1,13 @@
+# PCPCS 依賴
+#
+# 本專案僅使用 Python 標準庫，無需額外安裝套件
+#
+# 需要的標準庫:
+# - tkinter (GUI) - Linux 可能需要: sudo apt install python3-tk
+# - socket (網路)
+# - threading (多執行緒)
+# - json (資料序列化)
+# - subprocess (Ping 測試)
+# - os, sys, platform (系統操作)
+#
+# Python 版本需求: >= 3.7
