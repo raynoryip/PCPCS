@@ -11,7 +11,7 @@ TRANSFER_PORT = 52526           # TCP 傳輸端口
 BROADCAST_INTERVAL = 3          # 廣播間隔(秒)
 PING_TIMEOUT = 2                # Ping 超時(秒)
 BUFFER_SIZE = 8192              # 傳輸緩衝區大小
-FILE_CHUNK_SIZE = 65536         # 檔案分塊大小
+FILE_CHUNK_SIZE = 262144        # 檔案分塊大小 (256KB for better speed)
 
 # 訊息類型
 MSG_TYPE_DISCOVERY = "PCPCS_DISCOVERY"
@@ -51,4 +51,14 @@ def get_local_ip():
 
 # 預設接收目錄
 import os
-RECEIVE_DIR = os.path.join(os.path.expanduser("~"), "PCPCS_Received")
+
+def get_receive_dir():
+    """取得接收目錄路徑（跨平台）"""
+    if platform.system() == "Windows":
+        # Windows 使用 USERPROFILE 環境變數
+        home = os.environ.get('USERPROFILE', os.path.expanduser("~"))
+    else:
+        home = os.path.expanduser("~")
+    return os.path.join(home, "PCPCS_Received")
+
+RECEIVE_DIR = get_receive_dir()

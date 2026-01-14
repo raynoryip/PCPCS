@@ -164,6 +164,12 @@ LANG = {
         "file_skipped": "已跳過 (相同檔案)",
         "cancel_transfer": "取消傳輸",
         "transfer_cancelled": "傳輸已取消",
+        "delete_received": "刪除已接收檔案",
+        "delete_received_title": "刪除已接收檔案",
+        "delete_received_msg": "確定要刪除所有從 {name} 收到的檔案嗎？\n\n這將刪除：\n- 所有接收的檔案和資料夾\n- 聊天記錄\n\n此操作無法復原。",
+        "delete_success": "已刪除 {count} 個檔案/資料夾",
+        "delete_fail": "刪除失敗: {msg}",
+        "open_receive_folder": "開啟接收資料夾",
     },
     "en": {
         "window_title": "PCPCS",
@@ -284,6 +290,12 @@ LANG = {
         "file_skipped": "Skipped (identical file)",
         "cancel_transfer": "Cancel Transfer",
         "transfer_cancelled": "Transfer cancelled",
+        "delete_received": "Delete Received Files",
+        "delete_received_title": "Delete Received Files",
+        "delete_received_msg": "Are you sure you want to delete all files received from {name}?\n\nThis will delete:\n- All received files and folders\n- Chat history\n\nThis action cannot be undone.",
+        "delete_success": "Deleted {count} files/folders",
+        "delete_fail": "Delete failed: {msg}",
+        "open_receive_folder": "Open Receive Folder",
     }
 }
 
@@ -368,6 +380,17 @@ class ChatHistory:
         if os.path.exists(filepath):
             os.remove(filepath)
 
+    def get_received_files(self, peer_ip: str) -> list:
+        """取得從該 peer 收到的所有檔案路徑"""
+        history = self.load_history(peer_ip)
+        received = []
+        for entry in history:
+            if entry.get("is_file") and entry.get("file_info"):
+                file_path = entry["file_info"].get("path")
+                if file_path and os.path.exists(file_path):
+                    received.append(file_path)
+        return received
+
 
 class LanguageManager:
     """語言管理"""
@@ -375,6 +398,32 @@ class LanguageManager:
     def __init__(self):
         self.settings_file = os.path.join(DATA_DIR, "settings.json")
         self.current_lang = self._load_language()
+
+    def _load_settings(self) -> dict:
+        if os.path.exists(self.settings_file):
+            try:
+                with open(self.settings_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                pass
+        return {}
+
+    def _save_settings(self, settings: dict):
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(self.settings_file, 'w', encoding='utf-8') as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+
+    def get_last_selected_peer(self) -> tuple:
+        """取得上次選擇的 peer"""
+        settings = self._load_settings()
+        return settings.get("last_peer_ip"), settings.get("last_peer_name")
+
+    def set_last_selected_peer(self, ip: str, name: str):
+        """保存當前選擇的 peer"""
+        settings = self._load_settings()
+        settings["last_peer_ip"] = ip
+        settings["last_peer_name"] = name
+        self._save_settings(settings)
 
     def _load_language(self) -> str:
         if os.path.exists(self.settings_file):
@@ -973,9 +1022,13 @@ class PCPCSApp:
                                    command=self._clear_chat_history, style='Secondary.TButton')
         self.btn_clear.pack(side=tk.LEFT)
 
-        self.btn_open_folder = ttk.Button(chat_btn_frame, text=L("open_data_folder"),
-                                         command=self._open_data_folder, style='Secondary.TButton')
-        self.btn_open_folder.pack(side=tk.LEFT, padx=8)
+        self.btn_delete_received = ttk.Button(chat_btn_frame, text=L("delete_received"),
+                                             command=self._delete_received_files, style='Secondary.TButton')
+        self.btn_delete_received.pack(side=tk.LEFT, padx=8)
+
+        self.btn_open_receive = ttk.Button(chat_btn_frame, text=L("open_receive_folder"),
+                                          command=self._open_receive_folder, style='Secondary.TButton')
+        self.btn_open_receive.pack(side=tk.LEFT)
 
         # 檔案傳輸
         self.file_labelframe = ttk.LabelFrame(right_frame, text=f"  {L('file_transfer')}  ",
@@ -1161,6 +1214,9 @@ class PCPCSApp:
                 self._log(self._t("selected", name=self.selected_peer_name))
                 self._load_chat_history()
 
+                # 保存選擇的 peer (供重啟後恢復)
+                self.lang_mgr.set_last_selected_peer(self.selected_peer_ip, self.selected_peer_name)
+
                 if self.selected_peer_ip in self.discovery.peers:
                     peer = self.discovery.peers[self.selected_peer_ip]
                     self.recent_connections.add_connection(
@@ -1257,6 +1313,43 @@ class PCPCSApp:
             self.chat_display.delete('1.0', tk.END)
             self.chat_display.config(state='disabled')
             self._log(self._t("history_cleared"))
+
+    def _delete_received_files(self):
+        """刪除從選定 peer 收到的所有檔案"""
+        if not self.selected_peer_ip:
+            messagebox.showwarning(self._t("hint"), self._t("select_chat_target"))
+            return
+
+        result = messagebox.askyesno(
+            self._t("delete_received_title"),
+            self._t("delete_received_msg", name=self.selected_peer_name)
+        )
+
+        if result:
+            import shutil
+            deleted_count = 0
+
+            # 取得所有收到的檔案
+            received_files = self.chat_history.get_received_files(self.selected_peer_ip)
+
+            for file_path in received_files:
+                try:
+                    if os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+                        deleted_count += 1
+                    elif os.path.isfile(file_path):
+                        os.remove(file_path)
+                        deleted_count += 1
+                except Exception as e:
+                    self._log(self._t("delete_fail", msg=str(e)))
+
+            # 清除聊天記錄
+            self.chat_history.clear_history(self.selected_peer_ip)
+            self.chat_display.config(state='normal')
+            self.chat_display.delete('1.0', tk.END)
+            self.chat_display.config(state='disabled')
+
+            self._log(self._t("delete_success", count=deleted_count))
 
     def _open_data_folder(self):
         os.makedirs(DATA_DIR, exist_ok=True)
@@ -1756,7 +1849,20 @@ class PCPCSApp:
         self._log(self._t("service_started"))
         self._log(self._t("receive_location", path=RECEIVE_DIR))
 
+        # 恢復上次選擇的 peer
+        self.root.after(1000, self._restore_last_peer)
+
         self.root.mainloop()
+
+    def _restore_last_peer(self):
+        """恢復上次選擇的 peer 並載入聊天記錄"""
+        last_ip, last_name = self.lang_mgr.get_last_selected_peer()
+        if last_ip and last_name:
+            self.selected_peer_ip = last_ip
+            self.selected_peer_name = last_name
+            self.target_label.config(text=f"{self.selected_peer_name} ({self.selected_peer_ip})")
+            self._load_chat_history()
+            self._log(self._t("selected", name=self.selected_peer_name))
 
 
 def main():

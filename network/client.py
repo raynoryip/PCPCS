@@ -172,13 +172,32 @@ class TransferClient:
         thread.start()
         return True
 
-    def _calculate_file_hash(self, filepath: str) -> str:
-        """計算檔案的 MD5 hash"""
-        hash_md5 = hashlib.md5()
-        with open(filepath, 'rb') as f:
-            for chunk in iter(lambda: f.read(FILE_CHUNK_SIZE), b''):
-                hash_md5.update(chunk)
-        return hash_md5.hexdigest()
+    def _calculate_file_hash(self, filepath: str, quick: bool = True) -> str:
+        """
+        計算檔案的 hash
+        quick=True: 只讀取檔案頭尾各 64KB + 檔案大小，速度快但不完全精確
+        quick=False: 完整 MD5 hash，精確但慢
+        """
+        filesize = os.path.getsize(filepath)
+
+        if quick:
+            # 快速 hash：檔案大小 + 頭尾各 64KB
+            hash_data = str(filesize).encode()
+            with open(filepath, 'rb') as f:
+                # 讀取頭部
+                hash_data += f.read(65536)
+                # 讀取尾部
+                if filesize > 65536:
+                    f.seek(-65536, 2)
+                    hash_data += f.read(65536)
+            return hashlib.md5(hash_data).hexdigest()
+        else:
+            # 完整 MD5
+            hash_md5 = hashlib.md5()
+            with open(filepath, 'rb') as f:
+                for chunk in iter(lambda: f.read(FILE_CHUNK_SIZE), b''):
+                    hash_md5.update(chunk)
+            return hash_md5.hexdigest()
 
     def _get_folder_files(self, folder_path: str) -> list:
         """取得資料夾內所有檔案的資訊"""
