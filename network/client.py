@@ -15,7 +15,7 @@ from utils.config import (
     TRANSFER_PORT, BUFFER_SIZE, FILE_CHUNK_SIZE,
     MSG_TYPE_TEXT, MSG_TYPE_FILE,
     MSG_TYPE_FOLDER_START, MSG_TYPE_FOLDER_FILE, MSG_TYPE_FOLDER_END,
-    RESP_ACK, RESP_SKIP,
+    RESP_ACK, RESP_SKIP, RESP_LENGTH,
     SOCKET_SEND_BUFFER, SOCKET_RECV_BUFFER,
     get_hostname, get_platform
 )
@@ -231,11 +231,23 @@ class TransferClient:
 
         return files
 
+    def _recv_exact(self, sock: socket.socket, size: int) -> Optional[bytes]:
+        """精確接收指定大小的數據"""
+        data = b''
+        while len(data) < size:
+            chunk = sock.recv(min(size - len(data), BUFFER_SIZE))
+            if not chunk:
+                return None
+            data += chunk
+        return data
+
     def _recv_response(self, sock: socket.socket) -> str:
-        """接收回應"""
+        """接收固定長度回應 (避免 TCP 黏包)"""
         try:
-            response = sock.recv(BUFFER_SIZE).decode('utf-8')
-            return response
+            data = self._recv_exact(sock, RESP_LENGTH)
+            if data:
+                return data.decode('utf-8').rstrip('_')  # 去除填充字元
+            return ""
         except:
             return ""
 
