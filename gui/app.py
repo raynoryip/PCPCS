@@ -630,7 +630,7 @@ class PCPCSApp:
         # 語言管理
         self.lang_mgr = LanguageManager()
 
-        self.root.title(f"PCPCS - {get_hostname()} ({get_local_ip()})")
+        self.root.title(f"PCPCS - Perspic Cross PC Communication System | {get_hostname()} ({get_local_ip()})")
         self.root.geometry("1000x700")
         self.root.minsize(900, 600)
         self.root.configure(bg=COLORS["bg_light"])
@@ -998,19 +998,27 @@ class PCPCSApp:
         self.log_text.pack(fill=tk.X, padx=2, pady=2)
 
     def _switch_language(self):
-        """切換語言"""
+        """切換語言並自動重啟"""
         new_lang = self.lang_mgr.toggle()
 
-        # 提示需要重啟
-        if new_lang == "en":
-            msg = "Language changed to English.\nPlease restart the application to apply changes."
-        else:
-            msg = "語言已切換為繁體中文。\n請重新啟動應用程式以套用變更。"
+        # 自動重啟應用程式
+        self._restart_app()
 
-        messagebox.showinfo("Language / 語言", msg)
+    def _restart_app(self):
+        """重啟應用程式"""
+        # 停止所有服務
+        try:
+            self.discovery.stop()
+            self.server.stop()
+        except:
+            pass
 
-        # 更新按鈕文字
-        self.lang_btn.config(text=self._t("switch_to_en") if new_lang == "zh-TW" else self._t("switch_to_zh"))
+        # 關閉視窗
+        self.root.destroy()
+
+        # 重新啟動 Python 程式
+        python = sys.executable
+        os.execl(python, python, *sys.argv)
 
     def _update_recent_list(self):
         self.recent_listbox.delete(0, tk.END)
