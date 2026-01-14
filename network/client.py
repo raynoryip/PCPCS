@@ -22,6 +22,9 @@ from utils.config import (
     PARALLEL_CONNECTIONS, PARALLEL_CHUNK_SIZE, PARALLEL_PORT_START, PARALLEL_MIN_FILE_SIZE,
     get_hostname, get_platform
 )
+
+# 高速發送塊大小 (256KB - 減少系統調用次數)
+SEND_CHUNK_SIZE = 262144
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 
@@ -207,12 +210,12 @@ class TransferClient:
                 sock.close()
                 return False
 
-            # 發送分塊數據
+            # 發送分塊數據 (使用較大的塊減少系統調用)
             sent = 0
             with open(filepath, 'rb') as f:
                 f.seek(start_offset)
                 while sent < chunk_size:
-                    read_size = min(FILE_CHUNK_SIZE, chunk_size - sent)
+                    read_size = min(SEND_CHUNK_SIZE, chunk_size - sent)
                     data = f.read(read_size)
                     if not data:
                         break

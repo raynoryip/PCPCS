@@ -20,6 +20,9 @@ from utils.config import (
     SOCKET_SEND_BUFFER, SOCKET_RECV_BUFFER,
     PARALLEL_CONNECTIONS, PARALLEL_PORT_START
 )
+
+# 高速接收緩衝區大小 (256KB - 減少系統調用次數)
+RECV_CHUNK_SIZE = 262144
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 
@@ -242,7 +245,7 @@ class TransferServer:
                                       chunk_info: dict, progress_dict: dict,
                                       lock: threading.Lock) -> bool:
         """
-        處理單個並行分塊的接收
+        處理單個並行分塊的接收 (優化版 - 使用 recv_into 零拷貝)
         """
         chunk_id = chunk_info["chunk_id"]
         expected_offset = chunk_info["offset"]
@@ -280,17 +283,24 @@ class TransferServer:
             # 發送 ACK
             conn.send(RESP_ACK.encode('utf-8'))
 
-            # 接收數據並直接寫入對應位置
+            # 使用 recv_into 零拷貝接收 - 直接寫入預分配的緩衝區
             received = 0
+            # 使用較大的緩衝區減少系統調用次數
+            buf = bytearray(RECV_CHUNK_SIZE)
+            view = memoryview(buf)
+
             with open(filepath, 'r+b') as f:
                 f.seek(expected_offset)
                 while received < expected_size:
-                    chunk_size = min(FILE_CHUNK_SIZE, expected_size - received)
-                    data = self._recv_exact(conn, chunk_size)
-                    if not data:
+                    # 計算這次要接收的大小
+                    to_recv = min(RECV_CHUNK_SIZE, expected_size - received)
+                    # 使用 recv_into 直接寫入緩衝區，避免記憶體分配
+                    bytes_read = conn.recv_into(view[:to_recv])
+                    if bytes_read == 0:
                         raise Exception("連接中斷")
-                    f.write(data)
-                    received += len(data)
+                    # 直接寫入檔案
+                    f.write(view[:bytes_read])
+                    received += bytes_read
 
                     with lock:
                         progress_dict[chunk_id] = received

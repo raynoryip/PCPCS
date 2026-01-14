@@ -14,14 +14,19 @@ BUFFER_SIZE = 65536             # 傳輸緩衝區大小 (64KB for better through
 FILE_CHUNK_SIZE = 1048576       # 檔案分塊大小 (1MB for maximum speed)
 
 # Socket 優化參數
-SOCKET_SEND_BUFFER = 2097152    # 發送緩衝區 2MB
-SOCKET_RECV_BUFFER = 2097152    # 接收緩衝區 2MB
+SOCKET_SEND_BUFFER = 4194304    # 發送緩衝區 4MB (增大以提升吞吐量)
+SOCKET_RECV_BUFFER = 4194304    # 接收緩衝區 4MB
 
 # 並行傳輸參數
-PARALLEL_CONNECTIONS = 16       # 並行連接數 (類似 FileZilla)
-PARALLEL_CHUNK_SIZE = 16777216  # 並行傳輸分塊大小 16MB
+# 注意: 更多連接不一定更快！研究顯示 4-16 個連接是最佳範圍
+# 超過這個數量反而會因為競爭開銷而降低速度
+PARALLEL_CONNECTIONS = 8        # 並行連接數 (回調到 8，更穩定)
+PARALLEL_CHUNK_SIZE = 33554432  # 並行傳輸分塊大小 32MB (增大以減少開銷)
 PARALLEL_PORT_START = 52530     # 並行傳輸起始端口
 PARALLEL_MIN_FILE_SIZE = 10485760  # 啟用並行傳輸的最小檔案大小 10MB
+
+# 高速傳輸參數
+SEND_CHUNK_SIZE = 262144        # 單次發送大小 256KB (更大的塊=更少系統調用)
 
 # 訊息類型
 MSG_TYPE_DISCOVERY = "PCPCS_DISCOVERY"

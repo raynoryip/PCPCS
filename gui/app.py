@@ -166,7 +166,7 @@ LANG = {
         "transfer_cancelled": "傳輸已取消",
         "reset_progress": "重置",
         "parallel_ports": "並行傳輸",
-        "parallel_ports_info": "TCP 52530-52545 - 大檔案並行傳輸 (16連接)",
+        "parallel_ports_info": "TCP 52530-52537 - 大檔案並行傳輸 (8連接)",
         "parallel_ports_status": "並行端口狀態",
         "parallel_ports_test": "並行端口連接測試",
         "ports_open": "可用",
@@ -302,7 +302,7 @@ LANG = {
         "transfer_cancelled": "Transfer cancelled",
         "reset_progress": "Reset",
         "parallel_ports": "Parallel Transfer",
-        "parallel_ports_info": "TCP 52530-52545 - Large file parallel transfer (16 connections)",
+        "parallel_ports_info": "TCP 52530-52537 - Large file parallel transfer (8 connections)",
         "parallel_ports_status": "Parallel Ports Status",
         "parallel_ports_test": "Parallel Ports Connection Test",
         "ports_open": "Open",
@@ -539,7 +539,7 @@ class DiagnosticSystem:
             "tcp_52526_note": "",
             "parallel_ports": [],  # 並行端口狀態列表
             "parallel_ports_ok": 0,
-            "parallel_ports_total": 16
+            "parallel_ports_total": 8
         }
 
         try:
@@ -562,8 +562,8 @@ class DiagnosticSystem:
                 results["tcp_52526"] = True
                 results["tcp_52526_note"] = self.lang.get("pcpcs_listening")
 
-        # 檢查並行傳輸端口 52530-52545
-        for port in range(52530, 52546):
+        # 檢查並行傳輸端口 52530-52537
+        for port in range(52530, 52538):
             port_ok = False
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -628,7 +628,7 @@ class DiagnosticSystem:
             "ping_ms": None,
             "tcp_52526": False,
             "parallel_ports_ok": 0,
-            "parallel_ports_total": 16,
+            "parallel_ports_total": 8,
             "parallel_ports_detail": []
         }
 
@@ -657,8 +657,8 @@ class DiagnosticSystem:
         except:
             pass
 
-        # 測試並行傳輸端口 52530-52545 連接
-        for port in range(52530, 52546):
+        # 測試並行傳輸端口 52530-52537 連接
+        for port in range(52530, 52538):
             port_ok = False
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -714,19 +714,19 @@ class DiagnosticSystem:
                     "commands": []
                 })
             # 檢查並行端口連接
-            elif conn.get("tcp_52526") and conn.get("parallel_ports_ok", 0) < 16:
+            elif conn.get("tcp_52526") and conn.get("parallel_ports_ok", 0) < 8:
                 if self.system == "Linux":
                     recommendations.append({
                         "issue": self.lang.get("issue_parallel_ports"),
                         "solution": self.lang.get("solution_parallel_ports"),
-                        "commands": ["sudo ufw allow 52530:52545/tcp"]
+                        "commands": ["sudo ufw allow 52530:52537/tcp"]
                     })
                 elif self.system == "Windows":
                     recommendations.append({
                         "issue": self.lang.get("issue_parallel_ports"),
                         "solution": self.lang.get("solution_parallel_ports"),
                         "commands": [
-                            "netsh advfirewall firewall add rule name=\"PCPCS Parallel\" dir=in action=allow protocol=TCP localport=52530-52545"
+                            "netsh advfirewall firewall add rule name=\"PCPCS Parallel\" dir=in action=allow protocol=TCP localport=52530-52537"
                         ]
                     })
 
@@ -753,14 +753,14 @@ class DiagnosticSystem:
 ║ {L.get("ports_to_open"):<60} ║
 ║   UDP 52525 - {L.get("node_discovery"):<45} ║
 ║   TCP 52526 - {L.get("file_text_transfer"):<45} ║
-║   TCP 52530-52545 - {L.get("parallel_ports"):<39} ║
+║   TCP 52530-52537 - {L.get("parallel_ports"):<39} ║
 ╠══════════════════════════════════════════════════════════════╣
 """
         if self.system == "Linux":
             guide += f"""║ {L.get("linux_firewall"):<60} ║
 ║   sudo ufw allow 52525/udp                                    ║
 ║   sudo ufw allow 52526/tcp                                    ║
-║   sudo ufw allow 52530:52545/tcp                              ║
+║   sudo ufw allow 52530:52537/tcp                              ║
 ╚══════════════════════════════════════════════════════════════╝
 """
         elif self.system == "Windows":
@@ -768,7 +768,7 @@ class DiagnosticSystem:
 ║   {L.get("win_fw_step1"):<57} ║
 ║   {L.get("win_fw_step2"):<57} ║
 ║   {L.get("win_fw_step3"):<57} ║
-║   TCP 52530-52545 ({L.get("parallel_ports")})                    ║
+║   TCP 52530-52537 ({L.get("parallel_ports")})                    ║
 ╚══════════════════════════════════════════════════════════════╝
 """
         else:
@@ -1027,7 +1027,7 @@ class PCPCSApp:
             f"{L('ip')}: {get_local_ip()}",
             f"{L('discovery_port')}: UDP 52525",
             f"{L('transfer_port')}: TCP 52526",
-            f"{L('parallel_ports')}: TCP 52530-52545"
+            f"{L('parallel_ports')}: TCP 52530-52537"
         ]
         for text in info_texts:
             lbl = ttk.Label(self.info_labelframe, text=text, style='Info.TLabel')
@@ -1544,6 +1544,13 @@ class PCPCSApp:
                 diag_window.after(0, lambda: show_results(results))
 
             def show_results(results):
+                # 檢查視窗是否仍然存在
+                try:
+                    if not diag_window.winfo_exists():
+                        return
+                except:
+                    return
+
                 result_text.insert(tk.END, "\n" + "=" * 60 + "\n")
                 result_text.insert(tk.END, f"{L('diagnostic_result')}\n")
                 result_text.insert(tk.END, "=" * 60 + "\n\n")
@@ -1562,9 +1569,9 @@ class PCPCSApp:
 
                 # 並行端口狀態
                 parallel_ok = ports.get('parallel_ports_ok', 0)
-                parallel_total = ports.get('parallel_ports_total', 16)
+                parallel_total = ports.get('parallel_ports_total', 8)
                 result_text.insert(tk.END, f"\n{L('parallel_ports_status')}:\n")
-                result_text.insert(tk.END, f"  TCP 52530-52545: {parallel_ok}/{parallel_total} {L('ports_open')}\n")
+                result_text.insert(tk.END, f"  TCP 52530-52537: {parallel_ok}/{parallel_total} {L('ports_open')}\n")
 
                 fw = results.get("firewall_status", {})
                 result_text.insert(tk.END, f"\n{L('firewall')}: {fw.get('status', 'unknown')}\n")
@@ -1581,9 +1588,9 @@ class PCPCSApp:
 
                     # 並行端口連接測試結果
                     parallel_conn_ok = conn.get('parallel_ports_ok', 0)
-                    parallel_conn_total = conn.get('parallel_ports_total', 16)
+                    parallel_conn_total = conn.get('parallel_ports_total', 8)
                     result_text.insert(tk.END, f"\n{L('parallel_ports_test')}:\n")
-                    result_text.insert(tk.END, f"  TCP 52530-52545: {parallel_conn_ok}/{parallel_conn_total} {L('connected')}\n")
+                    result_text.insert(tk.END, f"  TCP 52530-52537: {parallel_conn_ok}/{parallel_conn_total} {L('connected')}\n")
                     if parallel_conn_ok < parallel_conn_total:
                         failed_ports = [p['port'] for p in conn.get('parallel_ports_detail', []) if not p['ok']]
                         if failed_ports:
