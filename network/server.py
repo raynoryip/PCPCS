@@ -15,9 +15,19 @@ from utils.config import (
     TRANSFER_PORT, BUFFER_SIZE, FILE_CHUNK_SIZE, RECEIVE_DIR,
     MSG_TYPE_TEXT, MSG_TYPE_FILE, MSG_TYPE_FILE_CHUNK, MSG_TYPE_FILE_END,
     MSG_TYPE_FOLDER_START, MSG_TYPE_FOLDER_FILE, MSG_TYPE_FOLDER_END,
-    RESP_ACK, RESP_SKIP, RESP_ERROR
+    RESP_ACK, RESP_SKIP, RESP_ERROR,
+    SOCKET_SEND_BUFFER, SOCKET_RECV_BUFFER
 )
 import hashlib
+
+
+def optimize_socket(sock: socket.socket):
+    """優化 socket 設定以獲得最大傳輸速度"""
+    # 增大緩衝區
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_SEND_BUFFER)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_RECV_BUFFER)
+    # 禁用 Nagle 演算法 (減少延遲)
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
 
 class TransferServer:
@@ -80,6 +90,7 @@ class TransferServer:
             while self.running:
                 try:
                     client_socket, addr = self.server_socket.accept()
+                    optimize_socket(client_socket)  # 優化接收端 socket
                     self._log(f"接受來自 {addr[0]} 的連接")
 
                     # 為每個客戶端創建新線程

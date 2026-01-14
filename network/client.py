@@ -16,9 +16,19 @@ from utils.config import (
     MSG_TYPE_TEXT, MSG_TYPE_FILE,
     MSG_TYPE_FOLDER_START, MSG_TYPE_FOLDER_FILE, MSG_TYPE_FOLDER_END,
     RESP_ACK, RESP_SKIP,
+    SOCKET_SEND_BUFFER, SOCKET_RECV_BUFFER,
     get_hostname, get_platform
 )
 import hashlib
+
+
+def optimize_socket(sock: socket.socket):
+    """優化 socket 設定以獲得最大傳輸速度"""
+    # 增大緩衝區
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_SEND_BUFFER)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_RECV_BUFFER)
+    # 禁用 Nagle 演算法 (減少延遲)
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
 
 class TransferClient:
@@ -51,6 +61,7 @@ class TransferClient:
         def _send():
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                optimize_socket(sock)
                 sock.settimeout(10)
                 sock.connect((target_ip, TRANSFER_PORT))
 
@@ -111,6 +122,7 @@ class TransferClient:
                 filename = os.path.basename(filepath)
 
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                optimize_socket(sock)
                 sock.settimeout(30)
                 sock.connect((target_ip, TRANSFER_PORT))
 
@@ -267,6 +279,7 @@ class TransferClient:
 
                 # 建立連接
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                optimize_socket(sock)
                 sock.settimeout(60)
                 sock.connect((target_ip, TRANSFER_PORT))
 

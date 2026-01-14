@@ -10,8 +10,12 @@ DISCOVERY_PORT = 52525          # UDP 廣播端口
 TRANSFER_PORT = 52526           # TCP 傳輸端口
 BROADCAST_INTERVAL = 3          # 廣播間隔(秒)
 PING_TIMEOUT = 2                # Ping 超時(秒)
-BUFFER_SIZE = 8192              # 傳輸緩衝區大小
-FILE_CHUNK_SIZE = 262144        # 檔案分塊大小 (256KB for better speed)
+BUFFER_SIZE = 65536             # 傳輸緩衝區大小 (64KB for better throughput)
+FILE_CHUNK_SIZE = 1048576       # 檔案分塊大小 (1MB for maximum speed)
+
+# Socket 優化參數
+SOCKET_SEND_BUFFER = 2097152    # 發送緩衝區 2MB
+SOCKET_RECV_BUFFER = 2097152    # 接收緩衝區 2MB
 
 # 訊息類型
 MSG_TYPE_DISCOVERY = "PCPCS_DISCOVERY"
