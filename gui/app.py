@@ -85,6 +85,7 @@ class DiagnosticSystem:
         results = {
             "system_info": self._get_system_info(),
             "network_info": self._get_network_info(),
+            "network_type": self._check_network_type(),
             "port_status": self._check_ports(),
             "firewall_status": self._check_firewall(),
             "connectivity": None
@@ -139,11 +140,14 @@ class DiagnosticSystem:
     def _check_ports(self) -> dict:
         """檢查端口狀態"""
         import socket
+        import subprocess
         results = {
             "udp_52525": False,
             "tcp_52526": False,
             "udp_52525_in_use": False,
-            "tcp_52526_in_use": False
+            "tcp_52526_in_use": False,
+            "udp_52525_process": None,
+            "tcp_52526_process": None
         }
 
         # 檢查 UDP 52525
@@ -157,6 +161,7 @@ class DiagnosticSystem:
             if "Address already in use" in err_str or "Only one usage" in err_str or "10048" in err_str:
                 results["udp_52525"] = True  # 端口可用，只是已被使用
                 results["udp_52525_in_use"] = True
+                results["udp_52525_process"] = self._get_process_using_port(52525, "udp")
 
         # 檢查 TCP 52526
         try:
@@ -169,8 +174,157 @@ class DiagnosticSystem:
             if "Address already in use" in err_str or "Only one usage" in err_str or "10048" in err_str:
                 results["tcp_52526"] = True  # 端口可用，只是已被使用
                 results["tcp_52526_in_use"] = True
+                results["tcp_52526_process"] = self._get_process_using_port(52526, "tcp")
 
         return results
+
+    def _get_process_using_port(self, port: int, protocol: str) -> str:
+        """取得使用特定端口的進程名稱"""
+        import subprocess
+        try:
+            if self.system == "Windows":
+                # Windows: netstat -ano 找到 PID，然後 tasklist 找進程名
+                proto_filter = "UDP" if protocol == "udp" else "TCP"
+                proc = subprocess.run(
+                    ["netstat", "-ano"],
+                    capture_output=True, text=True, timeout=10
+                )
+                for line in proc.stdout.split('\n'):
+                    if f":{port}" in line and proto_filter in line.upper():
+                        parts = line.split()
+                        if len(parts) >= 5:
+                            pid = parts[-1]
+                            # 取得進程名稱
+                            task_proc = subprocess.run(
+                                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                                capture_output=True, text=True, timeout=5
+                            )
+                            if task_proc.stdout.strip():
+                                # 格式: "process.exe","PID",...
+                                process_name = task_proc.stdout.strip().split(',')[0].strip('"')
+                                return f"{process_name} (PID: {pid})"
+                return None
+            else:
+                # Linux: ss 或 lsof
+                try:
+                    # 嘗試 ss 命令
+                    proto_flag = "-u" if protocol == "udp" else "-t"
+                    proc = subprocess.run(
+                        ["ss", proto_flag, "-lpn", f"sport = :{port}"],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if proc.returncode == 0 and proc.stdout:
+                        # 解析輸出找進程名
+                        import re
+                        match = re.search(r'users:\(\("([^"]+)",pid=(\d+)', proc.stdout)
+                        if match:
+                            return f"{match.group(1)} (PID: {match.group(2)})"
+                except:
+                    pass
+
+                try:
+                    # 備用: lsof
+                    proto_flag = "UDP" if protocol == "udp" else "TCP"
+                    proc = subprocess.run(
+                        ["lsof", "-i", f"{proto_flag}:{port}"],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if proc.returncode == 0 and proc.stdout:
+                        lines = proc.stdout.strip().split('\n')
+                        if len(lines) > 1:
+                            parts = lines[1].split()
+                            if len(parts) >= 2:
+                                return f"{parts[0]} (PID: {parts[1]})"
+                except:
+                    pass
+
+                return None
+        except Exception as e:
+            return None
+
+    def _check_network_type(self) -> dict:
+        """檢測網路類型 (公共/私人)"""
+        import subprocess
+        result = {
+            "is_public": False,
+            "network_name": "Unknown",
+            "warning": None
+        }
+
+        try:
+            if self.system == "Windows":
+                # Windows: 使用 PowerShell 取得網路類型
+                proc = subprocess.run(
+                    ["powershell", "-Command",
+                     "Get-NetConnectionProfile | Select-Object Name, NetworkCategory | ConvertTo-Json"],
+                    capture_output=True, text=True, timeout=10
+                )
+                if proc.returncode == 0 and proc.stdout.strip():
+                    import json
+                    try:
+                        profiles = json.loads(proc.stdout)
+                        # 可能是單個對象或列表
+                        if isinstance(profiles, dict):
+                            profiles = [profiles]
+                        for profile in profiles:
+                            name = profile.get("Name", "Unknown")
+                            category = profile.get("NetworkCategory", 0)
+                            # NetworkCategory: 0=Public, 1=Private, 2=DomainAuthenticated
+                            if category == 0:
+                                result["is_public"] = True
+                                result["network_name"] = name
+                                result["warning"] = f"警告: 目前連接到公共網路 '{name}'！\n不建議在公共網路上使用 PCPCS。"
+                                break
+                            else:
+                                result["network_name"] = name
+                    except json.JSONDecodeError:
+                        pass
+
+            elif self.system == "Linux":
+                # Linux: 檢查 NetworkManager 連線類型
+                try:
+                    proc = subprocess.run(
+                        ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show", "--active"],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if proc.returncode == 0:
+                        for line in proc.stdout.strip().split('\n'):
+                            if line:
+                                parts = line.split(':')
+                                if len(parts) >= 2:
+                                    result["network_name"] = parts[0]
+                                    conn_type = parts[1].lower()
+                                    # wifi 連線需要額外檢查
+                                    if "wifi" in conn_type or "wireless" in conn_type:
+                                        # 檢查 WiFi 是否有密碼保護
+                                        wifi_proc = subprocess.run(
+                                            ["nmcli", "-t", "-f", "SECURITY", "device", "wifi", "list"],
+                                            capture_output=True, text=True, timeout=5
+                                        )
+                                        # 如果有開放的 WiFi，警告
+                                        if wifi_proc.returncode == 0:
+                                            for wifi_line in wifi_proc.stdout.split('\n'):
+                                                if not wifi_line.strip() or wifi_line.strip() == "--":
+                                                    result["is_public"] = True
+                                                    result["warning"] = "警告: 可能連接到開放的 WiFi 網路！"
+                                                    break
+                except:
+                    pass
+
+                # 另一種方式：檢查是否在常見的公共 IP 範圍
+                # (這只是輔助檢測，不完全準確)
+                local_ip = self.local_ip
+                if local_ip.startswith("10.") or local_ip.startswith("172.") or local_ip.startswith("192.168."):
+                    # 私有 IP 範圍，但仍可能是公共 WiFi
+                    pass
+                else:
+                    result["is_public"] = True
+                    result["warning"] = "警告: IP 地址不在私有範圍內，可能是公共網路！"
+
+        except Exception as e:
+            result["error"] = str(e)
+
+        return result
 
     def _detect_security_software(self) -> dict:
         """檢測安裝的安全軟件/防火牆"""
@@ -400,6 +554,21 @@ class DiagnosticSystem:
     def _generate_recommendations(self, results: dict) -> list:
         """根據診斷結果生成建議"""
         recommendations = []
+
+        # 檢查公共網路警告 (優先)
+        network_type = results.get("network_type", {})
+        if network_type.get("is_public"):
+            recommendations.append({
+                "issue": "⚠️ 公共網路警告",
+                "solution": "您目前連接到公共網路，存在安全風險！",
+                "commands": [
+                    "建議:",
+                    "1. 避免在公共 WiFi (咖啡廳、機場等) 使用 PCPCS",
+                    "2. 如必須使用，請確保防火牆設定嚴格限制",
+                    "3. 只允許已知 IP 地址的連線",
+                    "4. 傳輸敏感檔案時請使用加密"
+                ]
+            })
 
         # 取得檢測到的防火牆軟件
         fw = results.get("firewall_status", {})
@@ -979,6 +1148,16 @@ class PCPCSApp:
                 result_text.insert(tk.END, "診斷結果:\n")
                 result_text.insert(tk.END, "=" * 60 + "\n\n")
 
+                # 網路類型警告 (優先顯示)
+                network_type = results.get("network_type", {})
+                if network_type.get("is_public"):
+                    result_text.insert(tk.END, "⚠️ " + "=" * 56 + " ⚠️\n")
+                    result_text.insert(tk.END, f"  {network_type.get('warning', '警告: 公共網路!')}\n")
+                    result_text.insert(tk.END, "⚠️ " + "=" * 56 + " ⚠️\n\n")
+                else:
+                    network_name = network_type.get("network_name", "Unknown")
+                    result_text.insert(tk.END, f"網路: {network_name} (私人網路 ✓)\n")
+
                 # 系統資訊
                 sys_info = results.get("system_info", {})
                 result_text.insert(tk.END, f"作業系統: {sys_info.get('os', 'Unknown')} {sys_info.get('os_version', '')[:30]}\n")
@@ -997,15 +1176,19 @@ class PCPCSApp:
                     result_text.insert(tk.END, f"  未檢測到第三方安全軟件\n")
                 result_text.insert(tk.END, f"  主要防火牆: {provider}\n")
 
-                # 端口狀態 - 更清楚的說明
+                # 端口狀態 - 顯示使用端口的進程
                 ports = results.get("port_status", {})
                 result_text.insert(tk.END, f"\n端口狀態 (本機):\n")
 
                 udp_status = ports.get('udp_52525')
                 udp_in_use = ports.get('udp_52525_in_use', False)
+                udp_process = ports.get('udp_52525_process')
                 if udp_status:
                     if udp_in_use:
-                        result_text.insert(tk.END, f"  UDP 52525: ✓ PCPCS 正在監聽中 (正常)\n")
+                        if udp_process:
+                            result_text.insert(tk.END, f"  UDP 52525: ✓ 使用中 - {udp_process}\n")
+                        else:
+                            result_text.insert(tk.END, f"  UDP 52525: ✓ 使用中 (可能是 PCPCS)\n")
                     else:
                         result_text.insert(tk.END, f"  UDP 52525: ✓ 端口可用\n")
                 else:
@@ -1013,9 +1196,13 @@ class PCPCSApp:
 
                 tcp_status = ports.get('tcp_52526')
                 tcp_in_use = ports.get('tcp_52526_in_use', False)
+                tcp_process = ports.get('tcp_52526_process')
                 if tcp_status:
                     if tcp_in_use:
-                        result_text.insert(tk.END, f"  TCP 52526: ✓ PCPCS 正在監聽中 (正常)\n")
+                        if tcp_process:
+                            result_text.insert(tk.END, f"  TCP 52526: ✓ 使用中 - {tcp_process}\n")
+                        else:
+                            result_text.insert(tk.END, f"  TCP 52526: ✓ 使用中 (可能是 PCPCS)\n")
                     else:
                         result_text.insert(tk.END, f"  TCP 52526: ✓ 端口可用\n")
                 else:
