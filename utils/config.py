@@ -5,6 +5,10 @@ PCPCS Configuration
 import socket
 import platform
 
+# 版本資訊
+VERSION = "1.0.0"
+VERSION_DATE = "2025-01-15"
+
 # 網路設定
 DISCOVERY_PORT = 52525          # UDP 廣播端口
 TRANSFER_PORT = 52526           # TCP 傳輸端口

@@ -180,6 +180,25 @@ LANG = {
         "delete_success": "已刪除 {count} 個檔案/資料夾",
         "delete_fail": "刪除失敗: {msg}",
         "open_receive_folder": "開啟接收資料夾",
+        "diag_step_system": "收集系統資訊...",
+        "diag_step_ports": "檢查端口狀態...",
+        "diag_step_firewall": "檢查防火牆設定...",
+        "diag_step_connectivity": "測試連接...",
+        "diag_step_recommendations": "生成建議...",
+        "diag_progress": "診斷進度: {step}/{total} - {msg}",
+        "port_in_use": "被其他程式佔用",
+        "port_used_by": "被 {app} 佔用",
+        "no_firewall_detected": "未檢測到防火牆",
+        "firewall_software": "防火牆軟體",
+        "firewall_open_steps": "開放端口步驟:",
+        "win_step1": "1. 按 Win+R，輸入 wf.msc 並回車",
+        "win_step2": "2. 點擊「入站規則」→「新增規則」",
+        "win_step3": "3. 選擇「端口」→ 下一步",
+        "win_step4": "4. 選擇 TCP，輸入 52526,52530-52537",
+        "win_step5": "5. 重複以上步驟，選擇 UDP，輸入 52525",
+        "macos_step1": "系統偏好設定 → 安全性與隱私 → 防火牆",
+        "macos_step2": "允許 Python 接受傳入連接",
+        "version": "版本",
     },
     "en": {
         "window_title": "PCPCS",
@@ -316,6 +335,25 @@ LANG = {
         "delete_success": "Deleted {count} files/folders",
         "delete_fail": "Delete failed: {msg}",
         "open_receive_folder": "Open Receive Folder",
+        "diag_step_system": "Gathering system info...",
+        "diag_step_ports": "Checking port status...",
+        "diag_step_firewall": "Checking firewall settings...",
+        "diag_step_connectivity": "Testing connectivity...",
+        "diag_step_recommendations": "Generating recommendations...",
+        "diag_progress": "Diagnostic progress: {step}/{total} - {msg}",
+        "port_in_use": "In use by another app",
+        "port_used_by": "Used by {app}",
+        "no_firewall_detected": "No firewall detected",
+        "firewall_software": "Firewall Software",
+        "firewall_open_steps": "Steps to open ports:",
+        "win_step1": "1. Press Win+R, type wf.msc and press Enter",
+        "win_step2": "2. Click 'Inbound Rules' → 'New Rule'",
+        "win_step3": "3. Select 'Port' → Next",
+        "win_step4": "4. Select TCP, enter 52526,52530-52537",
+        "win_step5": "5. Repeat above, select UDP, enter 52525",
+        "macos_step1": "System Preferences → Security & Privacy → Firewall",
+        "macos_step2": "Allow Python to accept incoming connections",
+        "version": "Version",
     }
 }
 
@@ -494,17 +532,36 @@ class DiagnosticSystem:
         self.local_ip = get_local_ip()
         self.lang = lang_mgr
 
-    def run_full_diagnostic(self, target_ip: str = None, callback=None):
+    def run_full_diagnostic(self, target_ip: str = None, callback=None, progress_callback=None):
+        """
+        執行完整診斷
+        progress_callback: (step, total, message) -> None
+        """
+        total_steps = 5 if target_ip else 4
+
+        def report_progress(step, msg):
+            if progress_callback:
+                progress_callback(step, total_steps, msg)
+
+        report_progress(1, self.lang.get("diag_step_system"))
         results = {
             "system_info": self._get_system_info(),
             "network_info": self._get_network_info(),
-            "port_status": self._check_ports(),
-            "firewall_status": self._check_firewall(),
-            "connectivity": None
         }
 
+        report_progress(2, self.lang.get("diag_step_ports"))
+        results["port_status"] = self._check_ports()
+
+        report_progress(3, self.lang.get("diag_step_firewall"))
+        results["firewall_status"] = self._check_firewall()
+
+        results["connectivity"] = None
         if target_ip:
+            report_progress(4, self.lang.get("diag_step_connectivity"))
             results["connectivity"] = self._test_connectivity(target_ip)
+            report_progress(5, self.lang.get("diag_step_recommendations"))
+        else:
+            report_progress(4, self.lang.get("diag_step_recommendations"))
 
         results["recommendations"] = self._generate_recommendations(results)
 
@@ -530,6 +587,49 @@ class DiagnosticSystem:
             "transfer_port": 52526
         }
 
+    def _get_port_user(self, port: int, protocol: str = "tcp") -> str:
+        """檢測是什麼程式在使用端口"""
+        import subprocess
+        try:
+            if self.system == "Windows":
+                # Windows 使用 netstat
+                cmd = ["netstat", "-ano"]
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                for line in proc.stdout.split('\n'):
+                    if f":{port}" in line and protocol.upper() in line:
+                        parts = line.split()
+                        if len(parts) >= 5:
+                            pid = parts[-1]
+                            # 獲取進程名稱
+                            try:
+                                proc2 = subprocess.run(
+                                    ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                                    capture_output=True, text=True, timeout=5
+                                )
+                                if proc2.stdout.strip():
+                                    name = proc2.stdout.strip().split(',')[0].strip('"')
+                                    if "python" in name.lower() or "PCPCS" in name:
+                                        return "PCPCS"
+                                    return name
+                            except:
+                                return f"PID:{pid}"
+            else:
+                # Linux/macOS 使用 lsof
+                proto_flag = "-i" if protocol == "tcp" else "-iUDP"
+                cmd = ["lsof", f"-i:{port}"]
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                for line in proc.stdout.split('\n')[1:]:  # 跳過標題行
+                    if line.strip():
+                        parts = line.split()
+                        if parts:
+                            name = parts[0]
+                            if "python" in name.lower():
+                                return "PCPCS"
+                            return name
+        except:
+            pass
+        return ""
+
     def _check_ports(self) -> dict:
         import socket
         results = {
@@ -537,11 +637,14 @@ class DiagnosticSystem:
             "tcp_52526": False,
             "udp_52525_note": "",
             "tcp_52526_note": "",
+            "udp_52525_user": "",
+            "tcp_52526_user": "",
             "parallel_ports": [],  # 並行端口狀態列表
             "parallel_ports_ok": 0,
             "parallel_ports_total": 8
         }
 
+        # 檢查 UDP 52525
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.bind(('', 52525))
@@ -549,9 +652,16 @@ class DiagnosticSystem:
             results["udp_52525"] = True
         except OSError as e:
             if "Address already in use" in str(e) or "Only one usage" in str(e):
-                results["udp_52525"] = True
-                results["udp_52525_note"] = self.lang.get("pcpcs_listening")
+                user = self._get_port_user(52525, "udp")
+                if user == "PCPCS" or not user:
+                    results["udp_52525"] = True
+                    results["udp_52525_note"] = self.lang.get("pcpcs_listening")
+                else:
+                    results["udp_52525"] = False
+                    results["udp_52525_note"] = self.lang.get("port_in_use")
+                    results["udp_52525_user"] = user
 
+        # 檢查 TCP 52526
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.bind(('', 52526))
@@ -559,12 +669,19 @@ class DiagnosticSystem:
             results["tcp_52526"] = True
         except OSError as e:
             if "Address already in use" in str(e) or "Only one usage" in str(e):
-                results["tcp_52526"] = True
-                results["tcp_52526_note"] = self.lang.get("pcpcs_listening")
+                user = self._get_port_user(52526, "tcp")
+                if user == "PCPCS" or not user:
+                    results["tcp_52526"] = True
+                    results["tcp_52526_note"] = self.lang.get("pcpcs_listening")
+                else:
+                    results["tcp_52526"] = False
+                    results["tcp_52526_note"] = self.lang.get("port_in_use")
+                    results["tcp_52526_user"] = user
 
         # 檢查並行傳輸端口 52530-52537
         for port in range(52530, 52538):
             port_ok = False
+            port_user = ""
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.bind(('', port))
@@ -572,8 +689,12 @@ class DiagnosticSystem:
                 port_ok = True
             except OSError as e:
                 if "Address already in use" in str(e) or "Only one usage" in str(e):
-                    port_ok = True  # PCPCS 正在使用
-            results["parallel_ports"].append({"port": port, "ok": port_ok})
+                    user = self._get_port_user(port, "tcp")
+                    if user == "PCPCS" or not user:
+                        port_ok = True
+                    else:
+                        port_user = user
+            results["parallel_ports"].append({"port": port, "ok": port_ok, "user": port_user})
             if port_ok:
                 results["parallel_ports_ok"] += 1
 
@@ -583,12 +704,15 @@ class DiagnosticSystem:
         import subprocess
         result = {
             "status": "unknown",
+            "software": "",  # 防火牆軟體名稱
             "details": "",
-            "pcpcs_allowed": "unknown"
+            "pcpcs_allowed": "unknown",
+            "open_steps": []  # 開放端口的步驟
         }
 
         try:
             if self.system == "Windows":
+                result["software"] = "Windows Defender Firewall"
                 proc = subprocess.run(
                     ["netsh", "advfirewall", "show", "allprofiles", "state"],
                     capture_output=True, text=True, timeout=10
@@ -596,23 +720,125 @@ class DiagnosticSystem:
                 result["details"] = proc.stdout
                 if "ON" in proc.stdout:
                     result["status"] = "enabled"
+                    # 檢查 PCPCS 規則是否存在
+                    try:
+                        proc2 = subprocess.run(
+                            ["netsh", "advfirewall", "firewall", "show", "rule", "name=all"],
+                            capture_output=True, text=True, timeout=15
+                        )
+                        if "PCPCS" in proc2.stdout or ("52525" in proc2.stdout and "52526" in proc2.stdout):
+                            result["pcpcs_allowed"] = "yes"
+                        else:
+                            result["pcpcs_allowed"] = "no"
+                    except:
+                        result["pcpcs_allowed"] = "unknown"
+
+                    # Windows 開放端口步驟
+                    result["open_steps"] = [
+                        self.lang.get("win_step1"),
+                        self.lang.get("win_step2"),
+                        self.lang.get("win_step3"),
+                        self.lang.get("win_step4"),
+                        self.lang.get("win_step5"),
+                    ]
                 else:
                     result["status"] = "disabled"
 
             elif self.system == "Linux":
-                proc = subprocess.run(
-                    ["ufw", "status"],
-                    capture_output=True, text=True, timeout=10
-                )
-                result["details"] = proc.stdout
-                if "active" in proc.stdout.lower():
-                    result["status"] = "enabled"
-                    if "52525" in proc.stdout and "52526" in proc.stdout:
-                        result["pcpcs_allowed"] = "yes"
+                # 檢測使用的防火牆軟體
+                fw_detected = False
+
+                # 檢查 ufw
+                try:
+                    proc = subprocess.run(
+                        ["ufw", "status"],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    if proc.returncode == 0:
+                        result["software"] = "UFW (Uncomplicated Firewall)"
+                        result["details"] = proc.stdout
+                        fw_detected = True
+                        if "active" in proc.stdout.lower():
+                            result["status"] = "enabled"
+                            if "52525" in proc.stdout and "52526" in proc.stdout:
+                                result["pcpcs_allowed"] = "yes"
+                            else:
+                                result["pcpcs_allowed"] = "no"
+                            result["open_steps"] = [
+                                "sudo ufw allow 52525/udp",
+                                "sudo ufw allow 52526/tcp",
+                                "sudo ufw allow 52530:52537/tcp",
+                                "sudo ufw reload"
+                            ]
+                        else:
+                            result["status"] = "disabled"
+                except FileNotFoundError:
+                    pass
+
+                # 檢查 firewalld
+                if not fw_detected:
+                    try:
+                        proc = subprocess.run(
+                            ["firewall-cmd", "--state"],
+                            capture_output=True, text=True, timeout=10
+                        )
+                        if proc.returncode == 0 and "running" in proc.stdout.lower():
+                            result["software"] = "firewalld"
+                            result["status"] = "enabled"
+                            fw_detected = True
+                            result["open_steps"] = [
+                                "sudo firewall-cmd --add-port=52525/udp --permanent",
+                                "sudo firewall-cmd --add-port=52526/tcp --permanent",
+                                "sudo firewall-cmd --add-port=52530-52537/tcp --permanent",
+                                "sudo firewall-cmd --reload"
+                            ]
+                    except FileNotFoundError:
+                        pass
+
+                # 檢查 iptables
+                if not fw_detected:
+                    try:
+                        proc = subprocess.run(
+                            ["iptables", "-L", "-n"],
+                            capture_output=True, text=True, timeout=10
+                        )
+                        if proc.returncode == 0:
+                            result["software"] = "iptables"
+                            # 檢查是否有規則
+                            if "DROP" in proc.stdout or "REJECT" in proc.stdout:
+                                result["status"] = "enabled"
+                            else:
+                                result["status"] = "minimal"
+                            fw_detected = True
+                            result["open_steps"] = [
+                                "sudo iptables -A INPUT -p udp --dport 52525 -j ACCEPT",
+                                "sudo iptables -A INPUT -p tcp --dport 52526 -j ACCEPT",
+                                "sudo iptables -A INPUT -p tcp --dport 52530:52537 -j ACCEPT"
+                            ]
+                    except (FileNotFoundError, PermissionError):
+                        pass
+
+                if not fw_detected:
+                    result["software"] = self.lang.get("no_firewall_detected")
+                    result["status"] = "unknown"
+
+            elif self.system == "Darwin":  # macOS
+                result["software"] = "macOS Firewall"
+                try:
+                    proc = subprocess.run(
+                        ["/usr/libexec/ApplicationFirewall/socketfilterfw", "--getglobalstate"],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    if "enabled" in proc.stdout.lower():
+                        result["status"] = "enabled"
                     else:
-                        result["pcpcs_allowed"] = "no"
-                else:
-                    result["status"] = "disabled"
+                        result["status"] = "disabled"
+                except:
+                    pass
+                result["open_steps"] = [
+                    self.lang.get("macos_step1"),
+                    self.lang.get("macos_step2"),
+                ]
 
         except Exception as e:
             result["error"] = str(e)
@@ -1188,7 +1414,7 @@ class PCPCSApp:
         copyright_frame = tk.Frame(right_frame, bg=COLORS["bg_light"])
         copyright_frame.pack(fill=tk.X, pady=(10, 0))
 
-        copyright_text = f"{L('copyright')}  |  {L('website')}"
+        copyright_text = f"PCPCS v1.0  |  {L('copyright')}  |  {L('website')}"
         copyright_label = tk.Label(
             copyright_frame,
             text=copyright_text,
@@ -1540,6 +1766,21 @@ class PCPCSApp:
 
             target = self.selected_peer_ip
 
+            def on_progress(step, total, msg):
+                def _update():
+                    try:
+                        if not diag_window.winfo_exists():
+                            return
+                    except:
+                        return
+                    # 更新進度顯示
+                    progress_pct = int((step / total) * 100)
+                    progress_text = f"\n[{progress_pct}%] {msg}"
+                    result_text.insert(tk.END, progress_text)
+                    result_text.see(tk.END)
+                    result_text.update()
+                diag_window.after(0, _update)
+
             def on_complete(results):
                 diag_window.after(0, lambda: show_results(results))
 
@@ -1562,9 +1803,21 @@ class PCPCSApp:
                 result_text.insert(tk.END, f"\n{L('port_status')}:\n")
                 udp_status = L('available') if ports.get('udp_52525') else L('unavailable')
                 tcp_status = L('available') if ports.get('tcp_52526') else L('unavailable')
-                udp_note = f" ({ports.get('udp_52525_note', '')})" if ports.get('udp_52525_note') else ""
-                tcp_note = f" ({ports.get('tcp_52526_note', '')})" if ports.get('tcp_52526_note') else ""
+
+                # UDP 52525 狀態和佔用程式
+                udp_note = ""
+                if ports.get('udp_52525_note'):
+                    udp_note = f" ({ports.get('udp_52525_note')})"
+                if ports.get('udp_52525_user'):
+                    udp_note = f" ({L('port_used_by', app=ports.get('udp_52525_user'))})"
                 result_text.insert(tk.END, f"  UDP 52525: {udp_status}{udp_note}\n")
+
+                # TCP 52526 狀態和佔用程式
+                tcp_note = ""
+                if ports.get('tcp_52526_note'):
+                    tcp_note = f" ({ports.get('tcp_52526_note')})"
+                if ports.get('tcp_52526_user'):
+                    tcp_note = f" ({L('port_used_by', app=ports.get('tcp_52526_user'))})"
                 result_text.insert(tk.END, f"  TCP 52526: {tcp_status}{tcp_note}\n")
 
                 # 並行端口狀態
@@ -1573,8 +1826,24 @@ class PCPCSApp:
                 result_text.insert(tk.END, f"\n{L('parallel_ports_status')}:\n")
                 result_text.insert(tk.END, f"  TCP 52530-52537: {parallel_ok}/{parallel_total} {L('ports_open')}\n")
 
+                # 顯示被佔用的並行端口
+                blocked_ports = [p for p in ports.get('parallel_ports', []) if not p['ok'] and p.get('user')]
+                if blocked_ports:
+                    for p in blocked_ports:
+                        result_text.insert(tk.END, f"    ⚠ Port {p['port']}: {L('port_used_by', app=p['user'])}\n")
+
+                # 防火牆狀態 (含軟體名稱)
                 fw = results.get("firewall_status", {})
-                result_text.insert(tk.END, f"\n{L('firewall')}: {fw.get('status', 'unknown')}\n")
+                fw_software = fw.get('software', '')
+                if fw_software:
+                    result_text.insert(tk.END, f"\n{L('firewall_software')}: {fw_software}\n")
+                result_text.insert(tk.END, f"{L('firewall')}: {fw.get('status', 'unknown')}\n")
+
+                # 如果防火牆開啟且有開放步驟，顯示步驟
+                if fw.get('status') == 'enabled' and fw.get('open_steps'):
+                    result_text.insert(tk.END, f"\n{L('firewall_open_steps')}\n")
+                    for step in fw.get('open_steps', []):
+                        result_text.insert(tk.END, f"  {step}\n")
 
                 conn = results.get("connectivity")
                 if conn:
@@ -1610,7 +1879,7 @@ class PCPCSApp:
                 result_text.see(tk.END)
 
             threading.Thread(
-                target=lambda: self.diagnostic.run_full_diagnostic(target, on_complete),
+                target=lambda: self.diagnostic.run_full_diagnostic(target, on_complete, on_progress),
                 daemon=True
             ).start()
 

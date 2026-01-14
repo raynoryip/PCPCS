@@ -1,5 +1,7 @@
 # PCPCS - Perspic Cross PC Communication System
 
+**Version 1.0.0**
+
 [English](#english) | [繁體中文](#繁體中文)
 
 ---
