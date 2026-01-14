@@ -16,10 +16,13 @@ from utils.config import (
     TRANSFER_PORT, BUFFER_SIZE, FILE_CHUNK_SIZE,
     MSG_TYPE_TEXT, MSG_TYPE_FILE,
     MSG_TYPE_FOLDER_START, MSG_TYPE_FOLDER_FILE, MSG_TYPE_FOLDER_END,
+    MSG_TYPE_PARALLEL_FILE, MSG_TYPE_PARALLEL_CHUNK, MSG_TYPE_PARALLEL_DONE,
     RESP_ACK_STRIPPED, RESP_SKIP_STRIPPED, RESP_LENGTH,
     SOCKET_SEND_BUFFER, SOCKET_RECV_BUFFER,
+    PARALLEL_CONNECTIONS, PARALLEL_CHUNK_SIZE, PARALLEL_PORT_START, PARALLEL_MIN_FILE_SIZE,
     get_hostname, get_platform
 )
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 
 # 檢查是否支援 sendfile (Linux/macOS)
@@ -175,15 +178,221 @@ class TransferClient:
         thread.start()
         return True
 
-    def send_file(self, target_ip: str, filepath: str) -> bool:
+    def _send_chunk_worker(self, target_ip: str, port: int, filepath: str,
+                           chunk_id: int, start_offset: int, chunk_size: int,
+                           progress_dict: dict, lock: threading.Lock) -> bool:
         """
-        發送檔案
+        並行傳輸的單個分塊工作者
+        """
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            optimize_socket(sock)
+            sock.settimeout(300)
+            sock.connect((target_ip, port))
+
+            # 發送分塊標頭
+            header = {
+                "type": MSG_TYPE_PARALLEL_CHUNK,
+                "chunk_id": chunk_id,
+                "offset": start_offset,
+                "size": chunk_size
+            }
+            header_json = json.dumps(header).encode('utf-8')
+            sock.send(len(header_json).to_bytes(4, 'big'))
+            sock.send(header_json)
+
+            # 等待 ACK
+            response = self._recv_response(sock)
+            if response != RESP_ACK_STRIPPED:
+                sock.close()
+                return False
+
+            # 發送分塊數據
+            sent = 0
+            with open(filepath, 'rb') as f:
+                f.seek(start_offset)
+                while sent < chunk_size:
+                    read_size = min(FILE_CHUNK_SIZE, chunk_size - sent)
+                    data = f.read(read_size)
+                    if not data:
+                        break
+                    sock.sendall(data)
+                    sent += len(data)
+
+                    # 更新進度
+                    with lock:
+                        progress_dict[chunk_id] = sent
+
+            # 等待確認
+            response = self._recv_response(sock)
+            sock.close()
+            return response == RESP_ACK_STRIPPED
+
+        except Exception as e:
+            self._log(f"分塊 {chunk_id} 傳輸失敗: {e}")
+            return False
+
+    def send_file_parallel(self, target_ip: str, filepath: str) -> bool:
+        """
+        使用多連接並行發送大檔案 (類似 FileZilla)
         """
         if not os.path.exists(filepath):
             self._log(f"檔案不存在: {filepath}")
             if self.on_complete:
                 self.on_complete(False, "檔案不存在")
             return False
+
+        def _send_parallel():
+            try:
+                filesize = os.path.getsize(filepath)
+                filename = os.path.basename(filepath)
+
+                # 建立主控制連接
+                main_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                optimize_socket(main_sock)
+                main_sock.settimeout(30)
+                main_sock.connect((target_ip, TRANSFER_PORT))
+
+                # 計算分塊
+                num_chunks = min(PARALLEL_CONNECTIONS, max(1, filesize // PARALLEL_CHUNK_SIZE))
+                chunk_size = filesize // num_chunks
+                chunks = []
+
+                for i in range(num_chunks):
+                    start = i * chunk_size
+                    if i == num_chunks - 1:
+                        # 最後一塊包含剩餘所有字節
+                        size = filesize - start
+                    else:
+                        size = chunk_size
+                    chunks.append({
+                        "chunk_id": i,
+                        "offset": start,
+                        "size": size,
+                        "port": PARALLEL_PORT_START + i
+                    })
+
+                # 發送並行傳輸請求
+                header = {
+                    "type": MSG_TYPE_PARALLEL_FILE,
+                    "sender": self.hostname,
+                    "platform": self.platform,
+                    "filename": filename,
+                    "filesize": filesize,
+                    "num_chunks": num_chunks,
+                    "chunks": chunks
+                }
+                header_json = json.dumps(header).encode('utf-8')
+                main_sock.send(len(header_json).to_bytes(4, 'big'))
+                main_sock.send(header_json)
+
+                # 等待伺服器準備好接收
+                response = self._recv_response(main_sock)
+                if response != RESP_ACK_STRIPPED:
+                    raise Exception(f"伺服器未準備好: {response}")
+
+                self._log(f"開始並行發送檔案: {filename} ({filesize} bytes, {num_chunks} 連接)")
+
+                # 進度追蹤
+                progress_dict = {i: 0 for i in range(num_chunks)}
+                lock = threading.Lock()
+                start_time = time.time()
+
+                # 啟動進度更新線程
+                progress_running = True
+                def update_progress():
+                    while progress_running:
+                        with lock:
+                            total_sent = sum(progress_dict.values())
+                        progress = (total_sent / filesize) * 100
+                        elapsed = time.time() - start_time
+                        speed = total_sent / elapsed if elapsed > 0 else 0
+                        remaining = (filesize - total_sent) / speed if speed > 0 else 0
+                        speed_mb = speed / (1024 * 1024)
+                        time_str = self._format_time(remaining)
+
+                        if self.on_progress:
+                            self.on_progress(progress, f"{filename} ({speed_mb:.1f} MB/s, {time_str})")
+                        time.sleep(0.1)
+
+                progress_thread = threading.Thread(target=update_progress, daemon=True)
+                progress_thread.start()
+
+                # 並行發送所有分塊
+                with ThreadPoolExecutor(max_workers=num_chunks) as executor:
+                    futures = []
+                    for chunk in chunks:
+                        future = executor.submit(
+                            self._send_chunk_worker,
+                            target_ip,
+                            chunk["port"],
+                            filepath,
+                            chunk["chunk_id"],
+                            chunk["offset"],
+                            chunk["size"],
+                            progress_dict,
+                            lock
+                        )
+                        futures.append(future)
+
+                    # 等待所有分塊完成
+                    results = [f.result() for f in as_completed(futures)]
+
+                progress_running = False
+
+                if not all(results):
+                    raise Exception("部分分塊傳輸失敗")
+
+                # 發送完成信號
+                done_header = {
+                    "type": MSG_TYPE_PARALLEL_DONE,
+                    "filename": filename,
+                    "filesize": filesize
+                }
+                done_json = json.dumps(done_header).encode('utf-8')
+                main_sock.send(len(done_json).to_bytes(4, 'big'))
+                main_sock.send(done_json)
+
+                # 等待最終確認
+                response = self._recv_response(main_sock)
+                main_sock.close()
+
+                elapsed = time.time() - start_time
+                avg_speed = filesize / elapsed if elapsed > 0 else 0
+                avg_speed_mb = avg_speed / (1024 * 1024)
+
+                if response == RESP_ACK_STRIPPED:
+                    self._log(f"檔案已發送到 {target_ip} (平均 {avg_speed_mb:.1f} MB/s)")
+                    if self.on_complete:
+                        self.on_complete(True, f"檔案 {filename} 發送成功 ({avg_speed_mb:.1f} MB/s)")
+                    return True
+                else:
+                    raise Exception(f"傳輸確認失敗: {response}")
+
+            except Exception as e:
+                self._log(f"並行發送檔案失敗: {e}")
+                if self.on_complete:
+                    self.on_complete(False, str(e))
+                return False
+
+        thread = threading.Thread(target=_send_parallel, daemon=True)
+        thread.start()
+        return True
+
+    def send_file(self, target_ip: str, filepath: str) -> bool:
+        """
+        發送檔案 (大檔案自動使用並行傳輸)
+        """
+        if not os.path.exists(filepath):
+            self._log(f"檔案不存在: {filepath}")
+            if self.on_complete:
+                self.on_complete(False, "檔案不存在")
+            return False
+
+        # 大檔案使用並行傳輸
+        filesize = os.path.getsize(filepath)
+        if filesize >= PARALLEL_MIN_FILE_SIZE:
+            return self.send_file_parallel(target_ip, filepath)
 
         def _send():
             try:

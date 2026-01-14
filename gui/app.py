@@ -164,6 +164,9 @@ LANG = {
         "file_skipped": "已跳過 (相同檔案)",
         "cancel_transfer": "取消傳輸",
         "transfer_cancelled": "傳輸已取消",
+        "reset_progress": "重置",
+        "parallel_ports": "並行傳輸",
+        "parallel_ports_info": "TCP 52530-52537 - 大檔案並行傳輸 (8連接)",
         "delete_received": "刪除已接收檔案",
         "delete_received_title": "刪除已接收檔案",
         "delete_received_msg": "確定要刪除所有從 {name} 收到的檔案嗎？\n\n這將刪除：\n- 所有接收的檔案和資料夾\n- 聊天記錄\n\n此操作無法復原。",
@@ -290,6 +293,9 @@ LANG = {
         "file_skipped": "Skipped (identical file)",
         "cancel_transfer": "Cancel Transfer",
         "transfer_cancelled": "Transfer cancelled",
+        "reset_progress": "Reset",
+        "parallel_ports": "Parallel Transfer",
+        "parallel_ports_info": "TCP 52530-52537 - Large file parallel transfer (8 connections)",
         "delete_received": "Delete Received Files",
         "delete_received_title": "Delete Received Files",
         "delete_received_msg": "Are you sure you want to delete all files received from {name}?\n\nThis will delete:\n- All received files and folders\n- Chat history\n\nThis action cannot be undone.",
@@ -681,12 +687,14 @@ class DiagnosticSystem:
 ║ {L.get("ports_to_open"):<60} ║
 ║   UDP 52525 - {L.get("node_discovery"):<45} ║
 ║   TCP 52526 - {L.get("file_text_transfer"):<45} ║
+║   TCP 52530-52537 - {L.get("parallel_ports"):<39} ║
 ╠══════════════════════════════════════════════════════════════╣
 """
         if self.system == "Linux":
             guide += f"""║ {L.get("linux_firewall"):<60} ║
 ║   sudo ufw allow 52525/udp                                    ║
 ║   sudo ufw allow 52526/tcp                                    ║
+║   sudo ufw allow 52530:52537/tcp                              ║
 ╚══════════════════════════════════════════════════════════════╝
 """
         elif self.system == "Windows":
@@ -694,6 +702,7 @@ class DiagnosticSystem:
 ║   {L.get("win_fw_step1"):<57} ║
 ║   {L.get("win_fw_step2"):<57} ║
 ║   {L.get("win_fw_step3"):<57} ║
+║   TCP 52530-52537 ({L.get("parallel_ports")})                    ║
 ╚══════════════════════════════════════════════════════════════╝
 """
         else:
@@ -950,7 +959,8 @@ class PCPCSApp:
             f"{L('name')}: {get_hostname()}",
             f"{L('ip')}: {get_local_ip()}",
             f"{L('discovery_port')}: UDP 52525",
-            f"{L('transfer_port')}: TCP 52526"
+            f"{L('transfer_port')}: TCP 52526",
+            f"{L('parallel_ports')}: TCP 52530-52537"
         ]
         for text in info_texts:
             lbl = ttk.Label(self.info_labelframe, text=text, style='Info.TLabel')
@@ -1079,9 +1089,15 @@ class PCPCSApp:
         self.progress_label = ttk.Label(self.progress_detail_frame, text="", style='Info.TLabel')
         self.progress_label.pack(side=tk.LEFT, anchor='w')
 
+        # 重置按鈕 (取消後重置進度條)
+        self.reset_btn = ttk.Button(self.progress_detail_frame, text=L("reset_progress"),
+                                   command=self._reset_progress, style='Secondary.TButton')
+        self.reset_btn.pack(side=tk.RIGHT)
+        self.reset_btn.pack_forget()  # 預設隱藏
+
         self.cancel_btn = ttk.Button(self.progress_detail_frame, text=L("cancel_transfer"),
-                                    command=self._cancel_folder_transfer, style='Secondary.TButton')
-        self.cancel_btn.pack(side=tk.RIGHT)
+                                    command=self._cancel_transfer, style='Secondary.TButton')
+        self.cancel_btn.pack(side=tk.RIGHT, padx=(0, 5))
         self.cancel_btn.pack_forget()  # 預設隱藏
 
         # 系統日誌
@@ -1558,6 +1574,9 @@ class PCPCSApp:
 
         self._log(self._t("sending_file"))
         self.send_file_btn.config(state='disabled')
+        self.send_folder_btn.config(state='disabled')
+        self.cancel_btn.pack(side=tk.RIGHT, padx=(0, 5))  # 顯示取消按鈕
+        self.reset_btn.pack_forget()  # 隱藏重置按鈕
         self.progress_var.set(0)
         self.client.send_file(self.selected_peer_ip, filepath)
 
@@ -1601,7 +1620,8 @@ class PCPCSApp:
         self._log(self._t("sending_folder"))
         self.send_file_btn.config(state='disabled')
         self.send_folder_btn.config(state='disabled')
-        self.cancel_btn.pack(side=tk.RIGHT)  # 顯示取消按鈕
+        self.cancel_btn.pack(side=tk.RIGHT, padx=(0, 5))  # 顯示取消按鈕
+        self.reset_btn.pack_forget()  # 隱藏重置按鈕
         self.progress_var.set(0)
 
         # 保存資料夾路徑供完成時使用
@@ -1610,10 +1630,24 @@ class PCPCSApp:
 
         self.client.send_folder(self.selected_peer_ip, folder_path)
 
-    def _cancel_folder_transfer(self):
-        """取消資料夾傳輸"""
-        self.client.cancel_folder_transfer()
+    def _cancel_transfer(self):
+        """取消傳輸 (檔案或資料夾)"""
+        self.client.cancel_folder_transfer()  # 這個方法也會取消並行傳輸
         self._log(self._t("transfer_cancelled"))
+        # 顯示重置按鈕
+        self.cancel_btn.pack_forget()
+        self.reset_btn.pack(side=tk.RIGHT)
+
+    def _reset_progress(self):
+        """重置進度條"""
+        self.progress_var.set(0)
+        self.progress_label.config(text="")
+        self.reset_btn.pack_forget()
+        self.send_file_btn.config(state='normal')
+        self.send_folder_btn.config(state='normal')
+        self.folder_transfer_active = False
+        self.transfer_start_time = None
+        self.transfer_size = 0
 
     def _on_folder_send_progress(self, current: int, total: int, filename: str, file_progress: float, overall_progress: float, status: str):
         """資料夾發送進度回調"""
@@ -1678,6 +1712,7 @@ class PCPCSApp:
         self.send_file_btn.config(state='normal')
         self.send_folder_btn.config(state='normal')
         self.cancel_btn.pack_forget()  # 隱藏取消按鈕
+        self.reset_btn.pack_forget()   # 隱藏重置按鈕
         self.progress_var.set(100 if success else 0)
 
         speed_str = ""

@@ -15,9 +15,12 @@ from utils.config import (
     TRANSFER_PORT, BUFFER_SIZE, FILE_CHUNK_SIZE, RECEIVE_DIR,
     MSG_TYPE_TEXT, MSG_TYPE_FILE, MSG_TYPE_FILE_CHUNK, MSG_TYPE_FILE_END,
     MSG_TYPE_FOLDER_START, MSG_TYPE_FOLDER_FILE, MSG_TYPE_FOLDER_END,
+    MSG_TYPE_PARALLEL_FILE, MSG_TYPE_PARALLEL_CHUNK, MSG_TYPE_PARALLEL_DONE,
     RESP_ACK, RESP_SKIP, RESP_ERROR, RESP_LENGTH,
-    SOCKET_SEND_BUFFER, SOCKET_RECV_BUFFER
+    SOCKET_SEND_BUFFER, SOCKET_RECV_BUFFER,
+    PARALLEL_CONNECTIONS, PARALLEL_PORT_START
 )
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 
 
@@ -135,6 +138,9 @@ class TransferServer:
             elif msg_type == MSG_TYPE_FILE:
                 self._handle_file(client_socket, header, client_ip)
                 client_socket.send(b"OK")
+            elif msg_type == MSG_TYPE_PARALLEL_FILE:
+                self._handle_parallel_file(client_socket, header, client_ip)
+                # parallel handler sends its own responses
             elif msg_type == MSG_TYPE_FOLDER_START:
                 self._handle_folder(client_socket, header, client_ip)
                 # folder handler sends its own responses
@@ -212,6 +218,174 @@ class TransferServer:
 
         except Exception as e:
             self._log(f"檔案接收失敗: {e}")
+            # 刪除不完整的檔案
+            if os.path.exists(filepath):
+                os.remove(filepath)
+
+    def _recv_response_stripped(self, sock: socket.socket) -> str:
+        """接收固定長度回應並去除填充"""
+        try:
+            data = self._recv_exact(sock, RESP_LENGTH)
+            if data:
+                return data.decode('utf-8').rstrip('_')
+            return ""
+        except:
+            return ""
+
+    def _handle_parallel_chunk_worker(self, port: int, filepath: str,
+                                      chunk_info: dict, progress_dict: dict,
+                                      lock: threading.Lock) -> bool:
+        """
+        處理單個並行分塊的接收
+        """
+        chunk_id = chunk_info["chunk_id"]
+        expected_offset = chunk_info["offset"]
+        expected_size = chunk_info["size"]
+
+        try:
+            # 創建監聽 socket
+            chunk_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            chunk_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            optimize_socket(chunk_sock)
+            chunk_sock.bind(('', port))
+            chunk_sock.listen(1)
+            chunk_sock.settimeout(30)
+
+            # 等待連接
+            conn, addr = chunk_sock.accept()
+            optimize_socket(conn)
+            conn.settimeout(300)
+
+            # 接收分塊標頭
+            header_len_data = self._recv_exact(conn, 4)
+            if not header_len_data:
+                raise Exception("未收到標頭")
+
+            header_length = int.from_bytes(header_len_data, 'big')
+            header_json = self._recv_exact(conn, header_length)
+            header = json.loads(header_json.decode('utf-8'))
+
+            if header.get("type") != MSG_TYPE_PARALLEL_CHUNK:
+                raise Exception(f"錯誤的訊息類型: {header.get('type')}")
+
+            if header.get("chunk_id") != chunk_id:
+                raise Exception(f"分塊 ID 不匹配: {header.get('chunk_id')} != {chunk_id}")
+
+            # 發送 ACK
+            conn.send(RESP_ACK.encode('utf-8'))
+
+            # 接收數據並直接寫入對應位置
+            received = 0
+            with open(filepath, 'r+b') as f:
+                f.seek(expected_offset)
+                while received < expected_size:
+                    chunk_size = min(FILE_CHUNK_SIZE, expected_size - received)
+                    data = self._recv_exact(conn, chunk_size)
+                    if not data:
+                        raise Exception("連接中斷")
+                    f.write(data)
+                    received += len(data)
+
+                    with lock:
+                        progress_dict[chunk_id] = received
+
+            # 發送完成確認
+            conn.send(RESP_ACK.encode('utf-8'))
+            conn.close()
+            chunk_sock.close()
+            return True
+
+        except Exception as e:
+            self._log(f"分塊 {chunk_id} 接收失敗: {e}")
+            return False
+
+    def _handle_parallel_file(self, sock: socket.socket, header: dict, sender_ip: str):
+        """處理並行檔案傳輸"""
+        filename = header.get("filename", "unknown_file")
+        filesize = header.get("filesize", 0)
+        num_chunks = header.get("num_chunks", 1)
+        chunks = header.get("chunks", [])
+        sender_name = header.get("sender", sender_ip)
+        sender_platform = header.get("platform", "Unknown")
+
+        # 安全處理檔名
+        safe_filename = os.path.basename(filename)
+        filepath = os.path.join(RECEIVE_DIR, safe_filename)
+
+        # 如果檔案已存在，添加編號
+        base, ext = os.path.splitext(safe_filename)
+        counter = 1
+        while os.path.exists(filepath):
+            filepath = os.path.join(RECEIVE_DIR, f"{base}_{counter}{ext}")
+            counter += 1
+
+        self._log(f"開始並行接收檔案: {safe_filename} ({filesize} bytes, {num_chunks} 連接)")
+
+        try:
+            # 預先創建檔案並分配空間
+            with open(filepath, 'wb') as f:
+                f.seek(filesize - 1)
+                f.write(b'\0')
+
+            # 發送準備好信號
+            sock.send(RESP_ACK.encode('utf-8'))
+
+            # 進度追蹤
+            progress_dict = {i: 0 for i in range(num_chunks)}
+            lock = threading.Lock()
+
+            # 啟動並行接收工作者
+            with ThreadPoolExecutor(max_workers=num_chunks) as executor:
+                futures = []
+                for chunk in chunks:
+                    future = executor.submit(
+                        self._handle_parallel_chunk_worker,
+                        chunk["port"],
+                        filepath,
+                        chunk,
+                        progress_dict,
+                        lock
+                    )
+                    futures.append(future)
+
+                # 等待所有分塊完成，同時更新進度
+                while not all(f.done() for f in futures):
+                    with lock:
+                        total_received = sum(progress_dict.values())
+                    if self.on_progress:
+                        progress = (total_received / filesize) * 100
+                        self.on_progress(progress, f"接收中: {safe_filename}")
+                    import time
+                    time.sleep(0.1)
+
+                results = [f.result() for f in futures]
+
+            if not all(results):
+                raise Exception("部分分塊接收失敗")
+
+            # 等待完成信號
+            header_len_data = self._recv_exact(sock, 4)
+            if not header_len_data:
+                raise Exception("未收到完成信號")
+
+            header_length = int.from_bytes(header_len_data, 'big')
+            done_json = self._recv_exact(sock, header_length)
+            done_header = json.loads(done_json.decode('utf-8'))
+
+            if done_header.get("type") != MSG_TYPE_PARALLEL_DONE:
+                raise Exception(f"錯誤的完成信號: {done_header.get('type')}")
+
+            # 發送最終確認
+            sock.send(RESP_ACK.encode('utf-8'))
+
+            self._log(f"檔案並行接收完成: {filepath}")
+
+            if self.on_file_received:
+                self.on_file_received(sender_ip, sender_name, filepath, filesize, sender_platform)
+
+        except Exception as e:
+            self._log(f"並行檔案接收失敗: {e}")
+            sock.send(RESP_ERROR.encode('utf-8'))
             # 刪除不完整的檔案
             if os.path.exists(filepath):
                 os.remove(filepath)
