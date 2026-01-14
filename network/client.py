@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.config import (
     TRANSFER_PORT, BUFFER_SIZE, FILE_CHUNK_SIZE,
     MSG_TYPE_TEXT, MSG_TYPE_FILE,
-    get_hostname
+    get_hostname, get_platform
 )
 
 
@@ -29,6 +29,7 @@ class TransferClient:
         self.on_status = on_status
         self.on_complete = on_complete
         self.hostname = get_hostname()
+        self.platform = get_platform()
 
     def _log(self, message: str):
         """輸出狀態訊息"""
@@ -52,6 +53,7 @@ class TransferClient:
                 header = {
                     "type": MSG_TYPE_TEXT,
                     "sender": self.hostname,
+                    "platform": self.platform,
                     "length": len(text_bytes)
                 }
                 header_json = json.dumps(header).encode('utf-8')
@@ -110,6 +112,7 @@ class TransferClient:
                 header = {
                     "type": MSG_TYPE_FILE,
                     "sender": self.hostname,
+                    "platform": self.platform,
                     "filename": filename,
                     "filesize": filesize
                 }

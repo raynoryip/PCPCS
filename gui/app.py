@@ -932,6 +932,21 @@ class PCPCSApp:
         """節點列表更新回調"""
         self.root.after(0, lambda: self._update_peer_list(peers))
 
+    def _ensure_peer_exists(self, ip: str, hostname: str, platform: str):
+        """確保節點存在於列表中，如果不存在則自動添加"""
+        if ip not in self.discovery.peers:
+            # 建立新的 PeerInfo 並加入列表
+            new_peer = PeerInfo(ip, hostname, platform)
+            new_peer.is_reachable = True  # 剛收到訊息，視為可達
+            self.discovery.peers[ip] = new_peer
+            self._log(f"自動添加節點: {hostname} ({ip})")
+            # 更新 UI 列表
+            self._update_peer_list(self.discovery.peers)
+        else:
+            # 節點已存在，更新 last_seen 時間
+            import time
+            self.discovery.peers[ip].last_seen = time.time()
+
     def _update_peer_list(self, peers: dict):
         """更新節點列表"""
         current_selection = self.selected_peer_ip
@@ -1357,12 +1372,15 @@ class PCPCSApp:
         self.transfer_start_time = None
         self.transfer_size = 0
 
-    def _on_text_received(self, sender_ip: str, sender_name: str, text: str):
+    def _on_text_received(self, sender_ip: str, sender_name: str, text: str, sender_platform: str = "Unknown"):
         """收到文字回調"""
-        self.root.after(0, lambda: self._handle_text_received(sender_ip, sender_name, text))
+        self.root.after(0, lambda: self._handle_text_received(sender_ip, sender_name, text, sender_platform))
 
-    def _handle_text_received(self, sender_ip: str, sender_name: str, text: str):
+    def _handle_text_received(self, sender_ip: str, sender_name: str, text: str, sender_platform: str = "Unknown"):
         """處理收到的文字"""
+        # 自動將發送者加入節點列表（如果不存在）
+        self._ensure_peer_exists(sender_ip, sender_name, sender_platform)
+
         # 如果目前選擇的就是發送者，直接顯示在聊天框
         if self.selected_peer_ip == sender_ip:
             self._add_chat_message(sender_name, text)
@@ -1382,12 +1400,15 @@ class PCPCSApp:
         self.root.clipboard_append(text)
         self._log(f"收到文字 (已複製到剪貼簿)")
 
-    def _on_file_received(self, sender_ip: str, sender_name: str, filepath: str, filesize: int):
+    def _on_file_received(self, sender_ip: str, sender_name: str, filepath: str, filesize: int, sender_platform: str = "Unknown"):
         """收到檔案回調"""
-        self.root.after(0, lambda: self._handle_file_received(sender_ip, sender_name, filepath, filesize))
+        self.root.after(0, lambda: self._handle_file_received(sender_ip, sender_name, filepath, filesize, sender_platform))
 
-    def _handle_file_received(self, sender_ip: str, sender_name: str, filepath: str, filesize: int):
+    def _handle_file_received(self, sender_ip: str, sender_name: str, filepath: str, filesize: int, sender_platform: str = "Unknown"):
         """處理收到的檔案"""
+        # 自動將發送者加入節點列表（如果不存在）
+        self._ensure_peer_exists(sender_ip, sender_name, sender_platform)
+
         filename = os.path.basename(filepath)
         size_str = self._format_size(filesize)
 

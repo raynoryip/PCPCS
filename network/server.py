@@ -138,6 +138,7 @@ class TransferServer:
         """處理文字訊息"""
         text_length = header.get("length", 0)
         sender_name = header.get("sender", sender_ip)
+        sender_platform = header.get("platform", "Unknown")
 
         text_data = self._recv_exact(sock, text_length)
         if text_data:
@@ -145,13 +146,14 @@ class TransferServer:
             self._log(f"收到來自 {sender_name} 的文字訊息")
 
             if self.on_text_received:
-                self.on_text_received(sender_ip, sender_name, text)
+                self.on_text_received(sender_ip, sender_name, text, sender_platform)
 
     def _handle_file(self, sock: socket.socket, header: dict, sender_ip: str):
         """處理檔案傳輸"""
         filename = header.get("filename", "unknown_file")
         filesize = header.get("filesize", 0)
         sender_name = header.get("sender", sender_ip)
+        sender_platform = header.get("platform", "Unknown")
 
         # 安全處理檔名，避免路徑穿越攻擊
         safe_filename = os.path.basename(filename)
@@ -186,7 +188,7 @@ class TransferServer:
             self._log(f"檔案接收完成: {filepath}")
 
             if self.on_file_received:
-                self.on_file_received(sender_ip, sender_name, filepath, filesize)
+                self.on_file_received(sender_ip, sender_name, filepath, filesize, sender_platform)
 
         except Exception as e:
             self._log(f"檔案接收失敗: {e}")
