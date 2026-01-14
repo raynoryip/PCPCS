@@ -18,7 +18,7 @@ SOCKET_SEND_BUFFER = 2097152    # 發送緩衝區 2MB
 SOCKET_RECV_BUFFER = 2097152    # 接收緩衝區 2MB
 
 # 並行傳輸參數
-PARALLEL_CONNECTIONS = 8        # 並行連接數 (類似 FileZilla)
+PARALLEL_CONNECTIONS = 16       # 並行連接數 (類似 FileZilla)
 PARALLEL_CHUNK_SIZE = 16777216  # 並行傳輸分塊大小 16MB
 PARALLEL_PORT_START = 52530     # 並行傳輸起始端口
 PARALLEL_MIN_FILE_SIZE = 10485760  # 啟用並行傳輸的最小檔案大小 10MB

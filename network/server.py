@@ -42,13 +42,15 @@ class TransferServer:
                  on_folder_received: Optional[Callable] = None,
                  on_progress: Optional[Callable] = None,
                  on_folder_progress: Optional[Callable] = None,
-                 on_status: Optional[Callable] = None):
+                 on_status: Optional[Callable] = None,
+                 on_transfer_start: Optional[Callable] = None):
         self.on_text_received = on_text_received
         self.on_file_received = on_file_received
         self.on_folder_received = on_folder_received  # (sender_ip, sender_name, folder_path, total_files, total_size)
         self.on_progress = on_progress
         self.on_folder_progress = on_folder_progress  # (current_file, total_files, file_name, file_progress, overall_progress, status)
         self.on_status = on_status
+        self.on_transfer_start = on_transfer_start  # (total_size) - 通知 GUI 開始接收
 
         self.running = False
         self.server_socket: Optional[socket.socket] = None
@@ -194,6 +196,10 @@ class TransferServer:
 
         self._log(f"開始接收檔案: {safe_filename} ({filesize} bytes)")
 
+        # 通知 GUI 開始接收（用於 ETA 計算）
+        if self.on_transfer_start:
+            self.on_transfer_start(filesize)
+
         received = 0
         try:
             with open(filepath, 'wb') as f:
@@ -321,6 +327,10 @@ class TransferServer:
 
         self._log(f"開始並行接收檔案: {safe_filename} ({filesize} bytes, {num_chunks} 連接)")
 
+        # 通知 GUI 開始接收（用於 ETA 計算）
+        if self.on_transfer_start:
+            self.on_transfer_start(filesize)
+
         try:
             # 預先創建檔案並分配空間
             with open(filepath, 'wb') as f:
@@ -441,6 +451,10 @@ class TransferServer:
         os.makedirs(folder_path, exist_ok=True)
 
         self._log(f"開始接收資料夾: {safe_folder_name} ({total_files} 檔案, {total_size} bytes)")
+
+        # 通知 GUI 開始接收（用於 ETA 計算）
+        if self.on_transfer_start:
+            self.on_transfer_start(total_size)
 
         # 發送 ACK
         sock.send(RESP_ACK.encode('utf-8'))

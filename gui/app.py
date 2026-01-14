@@ -166,7 +166,14 @@ LANG = {
         "transfer_cancelled": "傳輸已取消",
         "reset_progress": "重置",
         "parallel_ports": "並行傳輸",
-        "parallel_ports_info": "TCP 52530-52537 - 大檔案並行傳輸 (8連接)",
+        "parallel_ports_info": "TCP 52530-52545 - 大檔案並行傳輸 (16連接)",
+        "parallel_ports_status": "並行端口狀態",
+        "parallel_ports_test": "並行端口連接測試",
+        "ports_open": "可用",
+        "issue_parallel_ports": "並行傳輸端口未開放",
+        "solution_parallel_ports": "開放並行端口以啟用高速傳輸:",
+        "transfer_warning": "傳輸中，請勿關閉視窗！",
+        "eta_label": "預計剩餘",
         "delete_received": "刪除已接收檔案",
         "delete_received_title": "刪除已接收檔案",
         "delete_received_msg": "確定要刪除所有從 {name} 收到的檔案嗎？\n\n這將刪除：\n- 所有接收的檔案和資料夾\n- 聊天記錄\n\n此操作無法復原。",
@@ -295,7 +302,14 @@ LANG = {
         "transfer_cancelled": "Transfer cancelled",
         "reset_progress": "Reset",
         "parallel_ports": "Parallel Transfer",
-        "parallel_ports_info": "TCP 52530-52537 - Large file parallel transfer (8 connections)",
+        "parallel_ports_info": "TCP 52530-52545 - Large file parallel transfer (16 connections)",
+        "parallel_ports_status": "Parallel Ports Status",
+        "parallel_ports_test": "Parallel Ports Connection Test",
+        "ports_open": "Open",
+        "issue_parallel_ports": "Parallel transfer ports not open",
+        "solution_parallel_ports": "Open parallel ports for high-speed transfer:",
+        "transfer_warning": "Transfer in progress, do not close window!",
+        "eta_label": "ETA",
         "delete_received": "Delete Received Files",
         "delete_received_title": "Delete Received Files",
         "delete_received_msg": "Are you sure you want to delete all files received from {name}?\n\nThis will delete:\n- All received files and folders\n- Chat history\n\nThis action cannot be undone.",
@@ -522,7 +536,10 @@ class DiagnosticSystem:
             "udp_52525": False,
             "tcp_52526": False,
             "udp_52525_note": "",
-            "tcp_52526_note": ""
+            "tcp_52526_note": "",
+            "parallel_ports": [],  # 並行端口狀態列表
+            "parallel_ports_ok": 0,
+            "parallel_ports_total": 16
         }
 
         try:
@@ -544,6 +561,21 @@ class DiagnosticSystem:
             if "Address already in use" in str(e) or "Only one usage" in str(e):
                 results["tcp_52526"] = True
                 results["tcp_52526_note"] = self.lang.get("pcpcs_listening")
+
+        # 檢查並行傳輸端口 52530-52545
+        for port in range(52530, 52546):
+            port_ok = False
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.bind(('', port))
+                sock.close()
+                port_ok = True
+            except OSError as e:
+                if "Address already in use" in str(e) or "Only one usage" in str(e):
+                    port_ok = True  # PCPCS 正在使用
+            results["parallel_ports"].append({"port": port, "ok": port_ok})
+            if port_ok:
+                results["parallel_ports_ok"] += 1
 
         return results
 
@@ -594,7 +626,10 @@ class DiagnosticSystem:
         result = {
             "ping": False,
             "ping_ms": None,
-            "tcp_52526": False
+            "tcp_52526": False,
+            "parallel_ports_ok": 0,
+            "parallel_ports_total": 16,
+            "parallel_ports_detail": []
         }
 
         try:
@@ -621,6 +656,21 @@ class DiagnosticSystem:
             result["tcp_52526"] = True
         except:
             pass
+
+        # 測試並行傳輸端口 52530-52545 連接
+        for port in range(52530, 52546):
+            port_ok = False
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(2)
+                sock.connect((target_ip, port))
+                sock.close()
+                port_ok = True
+            except:
+                pass
+            result["parallel_ports_detail"].append({"port": port, "ok": port_ok})
+            if port_ok:
+                result["parallel_ports_ok"] += 1
 
         return result
 
@@ -663,6 +713,22 @@ class DiagnosticSystem:
                     "solution": self.lang.get("solution_tcp_fail"),
                     "commands": []
                 })
+            # 檢查並行端口連接
+            elif conn.get("tcp_52526") and conn.get("parallel_ports_ok", 0) < 16:
+                if self.system == "Linux":
+                    recommendations.append({
+                        "issue": self.lang.get("issue_parallel_ports"),
+                        "solution": self.lang.get("solution_parallel_ports"),
+                        "commands": ["sudo ufw allow 52530:52545/tcp"]
+                    })
+                elif self.system == "Windows":
+                    recommendations.append({
+                        "issue": self.lang.get("issue_parallel_ports"),
+                        "solution": self.lang.get("solution_parallel_ports"),
+                        "commands": [
+                            "netsh advfirewall firewall add rule name=\"PCPCS Parallel\" dir=in action=allow protocol=TCP localport=52530-52545"
+                        ]
+                    })
 
         if not recommendations:
             recommendations.append({
@@ -687,14 +753,14 @@ class DiagnosticSystem:
 ║ {L.get("ports_to_open"):<60} ║
 ║   UDP 52525 - {L.get("node_discovery"):<45} ║
 ║   TCP 52526 - {L.get("file_text_transfer"):<45} ║
-║   TCP 52530-52537 - {L.get("parallel_ports"):<39} ║
+║   TCP 52530-52545 - {L.get("parallel_ports"):<39} ║
 ╠══════════════════════════════════════════════════════════════╣
 """
         if self.system == "Linux":
             guide += f"""║ {L.get("linux_firewall"):<60} ║
 ║   sudo ufw allow 52525/udp                                    ║
 ║   sudo ufw allow 52526/tcp                                    ║
-║   sudo ufw allow 52530:52537/tcp                              ║
+║   sudo ufw allow 52530:52545/tcp                              ║
 ╚══════════════════════════════════════════════════════════════╝
 """
         elif self.system == "Windows":
@@ -702,7 +768,7 @@ class DiagnosticSystem:
 ║   {L.get("win_fw_step1"):<57} ║
 ║   {L.get("win_fw_step2"):<57} ║
 ║   {L.get("win_fw_step3"):<57} ║
-║   TCP 52530-52537 ({L.get("parallel_ports")})                    ║
+║   TCP 52530-52545 ({L.get("parallel_ports")})                    ║
 ╚══════════════════════════════════════════════════════════════╝
 """
         else:
@@ -748,7 +814,8 @@ class PCPCSApp:
             on_folder_received=self._on_folder_received,
             on_progress=self._on_receive_progress,
             on_folder_progress=self._on_folder_receive_progress,
-            on_status=self._log
+            on_status=self._log,
+            on_transfer_start=self._on_receive_start
         )
         self.client = TransferClient(
             on_progress=self._on_send_progress,
@@ -960,7 +1027,7 @@ class PCPCSApp:
             f"{L('ip')}: {get_local_ip()}",
             f"{L('discovery_port')}: UDP 52525",
             f"{L('transfer_port')}: TCP 52526",
-            f"{L('parallel_ports')}: TCP 52530-52537"
+            f"{L('parallel_ports')}: TCP 52530-52545"
         ]
         for text in info_texts:
             lbl = ttk.Label(self.info_labelframe, text=text, style='Info.TLabel')
@@ -1493,6 +1560,12 @@ class PCPCSApp:
                 result_text.insert(tk.END, f"  UDP 52525: {udp_status}{udp_note}\n")
                 result_text.insert(tk.END, f"  TCP 52526: {tcp_status}{tcp_note}\n")
 
+                # 並行端口狀態
+                parallel_ok = ports.get('parallel_ports_ok', 0)
+                parallel_total = ports.get('parallel_ports_total', 16)
+                result_text.insert(tk.END, f"\n{L('parallel_ports_status')}:\n")
+                result_text.insert(tk.END, f"  TCP 52530-52545: {parallel_ok}/{parallel_total} {L('ports_open')}\n")
+
                 fw = results.get("firewall_status", {})
                 result_text.insert(tk.END, f"\n{L('firewall')}: {fw.get('status', 'unknown')}\n")
 
@@ -1505,6 +1578,16 @@ class PCPCSApp:
                         result_text.insert(tk.END, f" ({conn['ping_ms']:.1f}ms)")
                     tcp_status = L('connected') if conn.get('tcp_52526') else L('not_connected')
                     result_text.insert(tk.END, f"\n  TCP 52526: {tcp_status}\n")
+
+                    # 並行端口連接測試結果
+                    parallel_conn_ok = conn.get('parallel_ports_ok', 0)
+                    parallel_conn_total = conn.get('parallel_ports_total', 16)
+                    result_text.insert(tk.END, f"\n{L('parallel_ports_test')}:\n")
+                    result_text.insert(tk.END, f"  TCP 52530-52545: {parallel_conn_ok}/{parallel_conn_total} {L('connected')}\n")
+                    if parallel_conn_ok < parallel_conn_total:
+                        failed_ports = [p['port'] for p in conn.get('parallel_ports_detail', []) if not p['ok']]
+                        if failed_ports:
+                            result_text.insert(tk.END, f"  {L('not_connected')}: {', '.join(map(str, failed_ports))}\n")
 
                 result_text.insert(tk.END, "\n" + "=" * 60 + "\n")
                 result_text.insert(tk.END, f"{L('recommendations')}:\n")
@@ -1653,6 +1736,14 @@ class PCPCSApp:
         """資料夾發送進度回調"""
         self.root.after(0, lambda: self._update_folder_progress(current, total, filename, file_progress, overall_progress, status, "send"))
 
+    def _on_receive_start(self, total_size: int):
+        """接收開始回調 - 用於 ETA 計算"""
+        def _start():
+            self.transfer_size = total_size
+            self.transfer_start_time = time.time()
+            self._log(self._t("transfer_warning"))
+        self.root.after(0, _start)
+
     def _on_folder_receive_progress(self, current: int, total: int, filename: str, file_progress: float, overall_progress: float, status: str):
         """資料夾接收進度回調"""
         self.root.after(0, lambda: self._update_folder_progress(current, total, filename, file_progress, overall_progress, status, "receive"))
@@ -1670,19 +1761,26 @@ class PCPCSApp:
         elif status == "sending" or status == "receiving":
             status_icon = "↑ " if direction == "send" else "↓ "
 
-        # 計算速度
+        # 計算速度和 ETA
         speed_str = ""
+        eta_str = ""
         if self.transfer_start_time and self.transfer_size > 0:
             elapsed = time.time() - self.transfer_start_time
-            if elapsed > 0:
+            if elapsed > 0 and overall_progress > 0:
                 speed = (overall_progress / 100 * self.transfer_size) / elapsed
                 speed_str = f" | {self._format_size(speed)}/s"
+
+                # 計算 ETA
+                remaining_bytes = self.transfer_size * (1 - overall_progress / 100)
+                if speed > 0:
+                    eta_seconds = remaining_bytes / speed
+                    eta_str = f" | {self._t('eta_label')}: {self._format_time(eta_seconds)}"
 
         # 顯示格式：(3/10) filename.txt [78%]
         progress_text = f"{status_icon}({current}/{total}) {filename}"
         if status in ["sending", "receiving"]:
             progress_text += f" [{file_progress:.0f}%]"
-        progress_text += f" - {overall_progress:.1f}%{speed_str}"
+        progress_text += f" - {overall_progress:.1f}%{speed_str}{eta_str}"
 
         self.progress_label.config(text=progress_text)
 
@@ -1696,13 +1794,20 @@ class PCPCSApp:
         self.progress_var.set(progress)
 
         speed_str = ""
+        eta_str = ""
         if self.transfer_start_time and self.transfer_size > 0:
             elapsed = time.time() - self.transfer_start_time
-            if elapsed > 0:
+            if elapsed > 0 and progress > 0:
                 speed = (progress / 100 * self.transfer_size) / elapsed
                 speed_str = f" | {self._format_size(speed)}/s"
 
-        self.progress_label.config(text=f"{message} ({progress:.1f}%){speed_str}")
+                # 計算 ETA
+                remaining_bytes = self.transfer_size * (1 - progress / 100)
+                if speed > 0:
+                    eta_seconds = remaining_bytes / speed
+                    eta_str = f" | {self._t('eta_label')}: {self._format_time(eta_seconds)}"
+
+        self.progress_label.config(text=f"{message} ({progress:.1f}%){speed_str}{eta_str}")
 
     def _on_send_complete(self, success: bool, message: str):
         self.root.after(0, lambda: self._handle_send_complete(success, message))
@@ -1861,6 +1966,19 @@ class PCPCSApp:
                 return f"{size:.1f} {unit}"
             size /= 1024
         return f"{size:.1f} TB"
+
+    def _format_time(self, seconds: float) -> str:
+        """格式化時間為人類可讀格式"""
+        if seconds < 60:
+            return f"{seconds:.0f}s"
+        elif seconds < 3600:
+            mins = int(seconds // 60)
+            secs = int(seconds % 60)
+            return f"{mins}m {secs}s"
+        else:
+            hours = int(seconds // 3600)
+            mins = int((seconds % 3600) // 60)
+            return f"{hours}h {mins}m"
 
     def _log(self, message: str):
         def _write():
