@@ -168,13 +168,153 @@ class DiagnosticSystem:
 
         return results
 
+    def _detect_security_software(self) -> dict:
+        """檢測安裝的安全軟件/防火牆"""
+        import subprocess
+        result = {
+            "detected": [],
+            "firewall_provider": "Unknown"
+        }
+
+        # 常見安全軟件的進程名和顯示名稱
+        security_software = {
+            # 進程名: 顯示名稱
+            "bdagent.exe": "Bitdefender",
+            "bdservicehost.exe": "Bitdefender",
+            "vsserv.exe": "Bitdefender",
+            "norton.exe": "Norton",
+            "ns.exe": "Norton",
+            "mcshield.exe": "McAfee",
+            "mcafee": "McAfee",
+            "avp.exe": "Kaspersky",
+            "kavtray.exe": "Kaspersky",
+            "ekrn.exe": "ESET",
+            "egui.exe": "ESET",
+            "avastui.exe": "Avast",
+            "avastsvc.exe": "Avast",
+            "avgui.exe": "AVG",
+            "avgsvc.exe": "AVG",
+            "cmdagent.exe": "Comodo",
+            "cis.exe": "Comodo",
+            "zonealarm.exe": "ZoneAlarm",
+            "vsmon.exe": "ZoneAlarm",
+            "mbam.exe": "Malwarebytes",
+            "mbamservice.exe": "Malwarebytes",
+            "sophosui.exe": "Sophos",
+            "savservice.exe": "Sophos",
+            "panda": "Panda",
+            "psanhost.exe": "Panda",
+            "f-secure": "F-Secure",
+            "fsgk32.exe": "F-Secure",
+            "dwengine.exe": "Dr.Web",
+            "spidergate.exe": "Dr.Web",
+            "360tray.exe": "360 Security",
+            "360sd.exe": "360 Security",
+        }
+
+        try:
+            if self.system == "Windows":
+                # 使用 WMIC 查詢防病毒軟件
+                try:
+                    proc = subprocess.run(
+                        ["wmic", "/namespace:\\\\root\\SecurityCenter2", "path",
+                         "AntiVirusProduct", "get", "displayName"],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    if proc.returncode == 0:
+                        lines = proc.stdout.strip().split('\n')
+                        for line in lines[1:]:  # 跳過標題行
+                            name = line.strip()
+                            if name and name != "displayName":
+                                result["detected"].append(name)
+                                if result["firewall_provider"] == "Unknown":
+                                    result["firewall_provider"] = name
+                except:
+                    pass
+
+                # 也檢查防火牆產品
+                try:
+                    proc = subprocess.run(
+                        ["wmic", "/namespace:\\\\root\\SecurityCenter2", "path",
+                         "FirewallProduct", "get", "displayName"],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    if proc.returncode == 0:
+                        lines = proc.stdout.strip().split('\n')
+                        for line in lines[1:]:
+                            name = line.strip()
+                            if name and name != "displayName" and name not in result["detected"]:
+                                result["detected"].append(name)
+                except:
+                    pass
+
+                # 備用方法：掃描進程
+                if not result["detected"]:
+                    try:
+                        proc = subprocess.run(
+                            ["tasklist", "/fo", "csv"],
+                            capture_output=True, text=True, timeout=10
+                        )
+                        processes = proc.stdout.lower()
+                        detected_names = set()
+                        for proc_name, display_name in security_software.items():
+                            if proc_name.lower() in processes:
+                                detected_names.add(display_name)
+                        result["detected"] = list(detected_names)
+                        if result["detected"]:
+                            result["firewall_provider"] = result["detected"][0]
+                    except:
+                        pass
+
+            elif self.system == "Linux":
+                # Linux 主要用 UFW 或 iptables
+                try:
+                    proc = subprocess.run(["which", "ufw"], capture_output=True, timeout=5)
+                    if proc.returncode == 0:
+                        result["detected"].append("UFW (Uncomplicated Firewall)")
+                        result["firewall_provider"] = "UFW"
+                except:
+                    pass
+
+                try:
+                    proc = subprocess.run(["which", "firewalld"], capture_output=True, timeout=5)
+                    if proc.returncode == 0:
+                        result["detected"].append("firewalld")
+                        if result["firewall_provider"] == "Unknown":
+                            result["firewall_provider"] = "firewalld"
+                except:
+                    pass
+
+                # 檢查是否有 ClamAV
+                try:
+                    proc = subprocess.run(["which", "clamscan"], capture_output=True, timeout=5)
+                    if proc.returncode == 0:
+                        result["detected"].append("ClamAV")
+                except:
+                    pass
+
+        except Exception as e:
+            result["error"] = str(e)
+
+        # 如果沒檢測到，標記為系統內建
+        if not result["detected"]:
+            if self.system == "Windows":
+                result["detected"].append("Windows Defender")
+                result["firewall_provider"] = "Windows Defender"
+            elif self.system == "Linux":
+                result["detected"].append("iptables (系統內建)")
+                result["firewall_provider"] = "iptables"
+
+        return result
+
     def _check_firewall(self) -> dict:
         """檢查防火牆狀態"""
         import subprocess
         result = {
             "status": "unknown",
             "details": "",
-            "pcpcs_allowed": "unknown"
+            "pcpcs_allowed": "unknown",
+            "software": self._detect_security_software()
         }
 
         try:
@@ -257,28 +397,123 @@ class DiagnosticSystem:
         """根據診斷結果生成建議"""
         recommendations = []
 
-        # 防火牆建議
+        # 取得檢測到的防火牆軟件
         fw = results.get("firewall_status", {})
-        if fw.get("status") == "enabled":
+        software = fw.get("software", {})
+        provider = software.get("firewall_provider", "Unknown")
+        detected = software.get("detected", [])
+
+        # 根據不同防火牆軟件生成特定建議
+        if self.system == "Windows":
+            # 第三方防火牆特定建議
+            third_party_guides = {
+                "Bitdefender": {
+                    "issue": f"檢測到 Bitdefender 防火牆",
+                    "solution": "在 Bitdefender 中設定 PCPCS 規則:",
+                    "commands": [
+                        "1. 開啟 Bitdefender → Protection → Firewall",
+                        "2. 點擊 Settings → Rules → Add Rule",
+                        "3. 新增規則允許 python.exe (或 pythonw.exe):",
+                        "   - Permission: Allow",
+                        "   - Network Type: Any",
+                        "   - Protocol: TCP + UDP",
+                        "   - Direction: Both (Inbound + Outbound)",
+                        "   - Local Port: 52525, 52526",
+                        "   - Remote Address: 不要限制 (留空或 Any)",
+                        "",
+                        "注意: Custom Remote Address 設定 192.168.1.0/24 可能導致",
+                        "無法接收來自其他子網的 UDP 廣播，建議移除此限制"
+                    ]
+                },
+                "Norton": {
+                    "issue": f"檢測到 Norton 防火牆",
+                    "solution": "在 Norton 中允許 PCPCS:",
+                    "commands": [
+                        "1. 開啟 Norton → Settings → Firewall",
+                        "2. 點擊 Program Control → Add",
+                        "3. 找到 python.exe 並設為 Allow",
+                        "4. 或在 Traffic Rules 中添加端口 52525/UDP 和 52526/TCP"
+                    ]
+                },
+                "McAfee": {
+                    "issue": f"檢測到 McAfee 防火牆",
+                    "solution": "在 McAfee 中允許 PCPCS:",
+                    "commands": [
+                        "1. 開啟 McAfee → Firewall",
+                        "2. 點擊 Internet Connections for Programs",
+                        "3. 找到 python.exe 並設為 Allow All",
+                        "4. 或添加端口規則: UDP 52525, TCP 52526"
+                    ]
+                },
+                "Kaspersky": {
+                    "issue": f"檢測到 Kaspersky 防火牆",
+                    "solution": "在 Kaspersky 中允許 PCPCS:",
+                    "commands": [
+                        "1. 開啟 Kaspersky → Settings → Protection → Firewall",
+                        "2. 點擊 Configure application rules",
+                        "3. 找到 python.exe 並設為 Trusted",
+                        "4. 或在 Packet rules 中添加允許規則"
+                    ]
+                },
+                "ESET": {
+                    "issue": f"檢測到 ESET 防火牆",
+                    "solution": "在 ESET 中允許 PCPCS:",
+                    "commands": [
+                        "1. 開啟 ESET → Setup → Network protection → Firewall",
+                        "2. 點擊 Configure → Rules",
+                        "3. 添加規則允許 python.exe",
+                        "4. 設定方向為 Both，端口為 52525 和 52526"
+                    ]
+                },
+                "Avast": {
+                    "issue": f"檢測到 Avast 防火牆",
+                    "solution": "在 Avast 中允許 PCPCS:",
+                    "commands": [
+                        "1. 開啟 Avast → Protection → Firewall",
+                        "2. 點擊 Application settings",
+                        "3. 找到 python.exe 並設為 Allow",
+                        "4. 或在 Firewall rules 中添加端口規則"
+                    ]
+                },
+                "Windows Defender": {
+                    "issue": "使用 Windows Defender 防火牆",
+                    "solution": "在 Windows Defender 中開放端口 (以管理員身份執行):",
+                    "commands": [
+                        'netsh advfirewall firewall add rule name="PCPCS UDP" dir=in action=allow protocol=UDP localport=52525',
+                        'netsh advfirewall firewall add rule name="PCPCS TCP" dir=in action=allow protocol=TCP localport=52526',
+                        "",
+                        "或手動設定:",
+                        "1. 開啟 Windows Defender 防火牆 → 進階設定",
+                        "2. 點擊 輸入規則 → 新增規則",
+                        "3. 選擇 連接埠 → UDP → 特定本機連接埠: 52525",
+                        "4. 允許連線 → 套用到所有設定檔 → 命名為 PCPCS UDP",
+                        "5. 重複以上步驟添加 TCP 52526"
+                    ]
+                }
+            }
+
+            # 檢查是否有匹配的第三方防火牆
+            for sw in detected:
+                for key, guide in third_party_guides.items():
+                    if key.lower() in sw.lower():
+                        recommendations.append(guide)
+                        break
+
+            # 如果沒有找到特定指南，添加通用 Windows 建議
+            if not recommendations:
+                recommendations.append(third_party_guides.get("Windows Defender"))
+
+        elif self.system == "Linux":
             if fw.get("pcpcs_allowed") == "no":
-                if self.system == "Linux":
-                    recommendations.append({
-                        "issue": "Linux 防火牆未開放 PCPCS 端口",
-                        "solution": "執行以下命令開放端口:",
-                        "commands": [
-                            "sudo ufw allow 52525/udp comment 'PCPCS Discovery'",
-                            "sudo ufw allow 52526/tcp comment 'PCPCS Transfer'"
-                        ]
-                    })
-                elif self.system == "Windows":
-                    recommendations.append({
-                        "issue": "Windows 防火牆可能阻擋連接",
-                        "solution": "在防火牆設定中允許 Python 或開放以下端口:",
-                        "commands": [
-                            "netsh advfirewall firewall add rule name=\"PCPCS UDP\" dir=in action=allow protocol=UDP localport=52525",
-                            "netsh advfirewall firewall add rule name=\"PCPCS TCP\" dir=in action=allow protocol=TCP localport=52526"
-                        ]
-                    })
+                recommendations.append({
+                    "issue": "Linux UFW 防火牆未開放 PCPCS 端口",
+                    "solution": "執行以下命令開放端口:",
+                    "commands": [
+                        "sudo ufw allow 52525/udp comment 'PCPCS Discovery'",
+                        "sudo ufw allow 52526/tcp comment 'PCPCS Transfer'",
+                        "sudo ufw reload"
+                    ]
+                })
 
         # 連接測試建議
         conn = results.get("connectivity", {})
@@ -287,13 +522,20 @@ class DiagnosticSystem:
                 recommendations.append({
                     "issue": "無法 Ping 到目標電腦",
                     "solution": "確認兩台電腦在同一個網段，並檢查目標電腦的防火牆是否允許 ICMP",
-                    "commands": []
+                    "commands": [
+                        f"本機 IP: {self.local_ip}",
+                        "確認目標 IP 在同一網段 (如 192.168.1.x)"
+                    ]
                 })
             elif conn.get("ping") and not conn.get("tcp_52526"):
                 recommendations.append({
                     "issue": "Ping 成功但 TCP 52526 連接失敗",
-                    "solution": "目標電腦的防火牆可能阻擋了 TCP 52526 端口，請在目標電腦上開放此端口",
-                    "commands": []
+                    "solution": f"目標電腦的 {provider} 防火牆可能阻擋了 TCP 52526 端口",
+                    "commands": [
+                        "請在目標電腦上:",
+                        "1. 確認 PCPCS 正在運行",
+                        "2. 檢查防火牆是否允許 TCP 52526 入站連線"
+                    ]
                 })
 
         if not recommendations:
@@ -737,15 +979,50 @@ class PCPCSApp:
                 sys_info = results.get("system_info", {})
                 result_text.insert(tk.END, f"作業系統: {sys_info.get('os', 'Unknown')} {sys_info.get('os_version', '')[:30]}\n")
 
-                # 端口狀態
+                # 安全軟件檢測
+                fw = results.get("firewall_status", {})
+                software = fw.get("software", {})
+                detected = software.get("detected", [])
+                provider = software.get("firewall_provider", "Unknown")
+
+                result_text.insert(tk.END, f"\n安全軟件/防火牆:\n")
+                if detected:
+                    for sw in detected:
+                        result_text.insert(tk.END, f"  ✓ {sw}\n")
+                else:
+                    result_text.insert(tk.END, f"  未檢測到第三方安全軟件\n")
+                result_text.insert(tk.END, f"  主要防火牆: {provider}\n")
+
+                # 端口狀態 - 更清楚的說明
                 ports = results.get("port_status", {})
-                result_text.insert(tk.END, f"\n端口狀態:\n")
-                result_text.insert(tk.END, f"  UDP 52525: {'✓ 可用' if ports.get('udp_52525') else '✗ 不可用'}\n")
-                result_text.insert(tk.END, f"  TCP 52526: {'✓ 可用' if ports.get('tcp_52526') else '✗ 不可用'}\n")
+                result_text.insert(tk.END, f"\n端口狀態 (本機監聽):\n")
+
+                udp_status = ports.get('udp_52525')
+                udp_note = ports.get('udp_52525_note', '')
+                if udp_status:
+                    if udp_note:
+                        result_text.insert(tk.END, f"  UDP 52525: ✓ 正在使用中 (PCPCS 已監聽)\n")
+                    else:
+                        result_text.insert(tk.END, f"  UDP 52525: ✓ 可用\n")
+                else:
+                    result_text.insert(tk.END, f"  UDP 52525: ✗ 被其他程式佔用\n")
+
+                tcp_status = ports.get('tcp_52526')
+                tcp_note = ports.get('tcp_52526_note', '')
+                if tcp_status:
+                    if tcp_note:
+                        result_text.insert(tk.END, f"  TCP 52526: ✓ 正在使用中 (PCPCS 已監聽)\n")
+                    else:
+                        result_text.insert(tk.END, f"  TCP 52526: ✓ 可用\n")
+                else:
+                    result_text.insert(tk.END, f"  TCP 52526: ✗ 被其他程式佔用\n")
 
                 # 防火牆狀態
-                fw = results.get("firewall_status", {})
-                result_text.insert(tk.END, f"\n防火牆: {fw.get('status', 'unknown')}\n")
+                result_text.insert(tk.END, f"\n防火牆狀態: {fw.get('status', 'unknown')}\n")
+                if fw.get('pcpcs_allowed') == 'yes':
+                    result_text.insert(tk.END, f"  PCPCS 端口規則: ✓ 已設定\n")
+                elif fw.get('pcpcs_allowed') == 'no':
+                    result_text.insert(tk.END, f"  PCPCS 端口規則: ✗ 未設定\n")
 
                 # 連接測試
                 conn = results.get("connectivity")
