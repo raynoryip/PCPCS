@@ -967,40 +967,57 @@ class DiagnosticSystem:
 
     def get_quick_setup_guide(self) -> str:
         L = self.lang
-        guide = f"""
-╔══════════════════════════════════════════════════════════════╗
-║              {L.get("quick_setup_guide"):<43}║
-╠══════════════════════════════════════════════════════════════╣
-║ {L.get("local_info_label"):<60} ║
-║   {L.get("computer_name")}: {self.hostname:<42} ║
-║   {L.get("ip_address")}:  {self.local_ip:<43} ║
-║   {L.get("operating_system")}: {self.system:<44} ║
-╠══════════════════════════════════════════════════════════════╣
-║ {L.get("ports_to_open"):<60} ║
-║   UDP 52525 - {L.get("node_discovery"):<45} ║
-║   TCP 52526 - {L.get("file_text_transfer"):<45} ║
-║   TCP 52530-52537 - {L.get("parallel_ports"):<39} ║
-╠══════════════════════════════════════════════════════════════╣
-"""
+
+        def pad_line(text: str, width: int = 60) -> str:
+            """計算實際顯示寬度並填充空格 (中文字符佔2格)"""
+            display_len = 0
+            for char in text:
+                if ord(char) > 127:  # 非 ASCII 字符 (中文等)
+                    display_len += 2
+                else:
+                    display_len += 1
+            padding = width - display_len
+            if padding > 0:
+                return text + " " * padding
+            return text[:width]  # 截斷過長的文字
+
+        lines = [
+            "╔══════════════════════════════════════════════════════════════╗",
+            f"║  {pad_line(L.get('quick_setup_guide'), 60)}║",
+            "╠══════════════════════════════════════════════════════════════╣",
+            f"║  {pad_line(L.get('local_info_label'), 60)}║",
+            f"║    {pad_line(L.get('computer_name') + ': ' + self.hostname, 58)}║",
+            f"║    {pad_line(L.get('ip_address') + ': ' + self.local_ip, 58)}║",
+            f"║    {pad_line(L.get('operating_system') + ': ' + self.system, 58)}║",
+            "╠══════════════════════════════════════════════════════════════╣",
+            f"║  {pad_line(L.get('ports_to_open'), 60)}║",
+            f"║    UDP 52525 - {pad_line(L.get('node_discovery'), 45)}║",
+            f"║    TCP 52526 - {pad_line(L.get('file_text_transfer'), 45)}║",
+            f"║    TCP 52530-52537 - {pad_line(L.get('parallel_ports'), 39)}║",
+            "╠══════════════════════════════════════════════════════════════╣",
+        ]
+
         if self.system == "Linux":
-            guide += f"""║ {L.get("linux_firewall"):<60} ║
-║   sudo ufw allow 52525/udp                                    ║
-║   sudo ufw allow 52526/tcp                                    ║
-║   sudo ufw allow 52530:52537/tcp                              ║
-╚══════════════════════════════════════════════════════════════╝
-"""
+            lines.extend([
+                f"║  {pad_line(L.get('linux_firewall'), 60)}║",
+                "║    sudo ufw allow 52525/udp                                  ║",
+                "║    sudo ufw allow 52526/tcp                                  ║",
+                "║    sudo ufw allow 52530:52537/tcp                            ║",
+                "╚══════════════════════════════════════════════════════════════╝",
+            ])
         elif self.system == "Windows":
-            guide += f"""║ {L.get("windows_firewall"):<60} ║
-║   {L.get("win_fw_step1"):<57} ║
-║   {L.get("win_fw_step2"):<57} ║
-║   {L.get("win_fw_step3"):<57} ║
-║   TCP 52530-52537 ({L.get("parallel_ports")})                    ║
-╚══════════════════════════════════════════════════════════════╝
-"""
+            lines.extend([
+                f"║  {pad_line(L.get('windows_firewall'), 60)}║",
+                f"║    {pad_line(L.get('win_fw_step1'), 58)}║",
+                f"║    {pad_line(L.get('win_fw_step2'), 58)}║",
+                f"║    {pad_line(L.get('win_fw_step3'), 58)}║",
+                f"║    {pad_line('TCP 52530-52537 (' + L.get('parallel_ports') + ')', 58)}║",
+                "╚══════════════════════════════════════════════════════════════╝",
+            ])
         else:
-            guide += """╚══════════════════════════════════════════════════════════════╝
-"""
-        return guide
+            lines.append("╚══════════════════════════════════════════════════════════════╝")
+
+        return "\n" + "\n".join(lines) + "\n"
 
 
 class PCPCSApp:
