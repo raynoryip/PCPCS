@@ -6,6 +6,7 @@ import socket
 import json
 import os
 import threading
+import time
 from typing import Callable, Optional
 
 import sys
@@ -20,6 +21,13 @@ from utils.config import (
     get_hostname, get_platform
 )
 import hashlib
+
+# 檢查是否支援 sendfile (Linux/macOS)
+try:
+    _sendfile = os.sendfile
+    HAS_SENDFILE = True
+except AttributeError:
+    HAS_SENDFILE = False
 
 
 def optimize_socket(sock: socket.socket):
@@ -53,6 +61,67 @@ class TransferClient:
             self.on_status(message)
         else:
             print(message)
+
+    def _format_time(self, seconds: float) -> str:
+        """格式化剩餘時間"""
+        if seconds < 0 or seconds > 86400:  # > 24 hours
+            return "--:--"
+        if seconds < 60:
+            return f"{int(seconds)}s"
+        elif seconds < 3600:
+            return f"{int(seconds // 60)}m {int(seconds % 60)}s"
+        else:
+            return f"{int(seconds // 3600)}h {int((seconds % 3600) // 60)}m"
+
+    def _send_file_data(self, sock: socket.socket, filepath: str, filesize: int,
+                        on_progress_callback: Optional[Callable] = None) -> int:
+        """
+        高效發送檔案數據 (使用 sendfile 或 fallback)
+        返回實際發送的字節數
+        """
+        sent = 0
+        start_time = time.time()
+
+        if HAS_SENDFILE:
+            # 使用 zero-copy sendfile (Linux/macOS)
+            with open(filepath, 'rb') as f:
+                fd = f.fileno()
+                sock_fd = sock.fileno()
+                while sent < filesize:
+                    try:
+                        # sendfile 一次最多傳輸 2GB
+                        chunk_to_send = min(filesize - sent, 0x7FFFFFFF)
+                        n = _sendfile(sock_fd, fd, sent, chunk_to_send)
+                        if n == 0:
+                            break
+                        sent += n
+
+                        # 更新進度
+                        if on_progress_callback:
+                            elapsed = time.time() - start_time
+                            speed = sent / elapsed if elapsed > 0 else 0
+                            remaining = (filesize - sent) / speed if speed > 0 else 0
+                            on_progress_callback(sent, filesize, speed, remaining)
+                    except BlockingIOError:
+                        continue
+        else:
+            # Fallback: 普通 read/send
+            with open(filepath, 'rb') as f:
+                while sent < filesize:
+                    chunk = f.read(FILE_CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    sock.sendall(chunk)
+                    sent += len(chunk)
+
+                    # 更新進度
+                    if on_progress_callback:
+                        elapsed = time.time() - start_time
+                        speed = sent / elapsed if elapsed > 0 else 0
+                        remaining = (filesize - sent) / speed if speed > 0 else 0
+                        on_progress_callback(sent, filesize, speed, remaining)
+
+        return sent
 
     def send_text(self, target_ip: str, text: str) -> bool:
         """
@@ -123,7 +192,7 @@ class TransferClient:
 
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 optimize_socket(sock)
-                sock.settimeout(30)
+                sock.settimeout(300)  # 5 分鐘超時 (大檔案)
                 sock.connect((target_ip, TRANSFER_PORT))
 
                 # 準備標頭
@@ -142,20 +211,16 @@ class TransferClient:
 
                 self._log(f"開始發送檔案: {filename} ({filesize} bytes)")
 
-                # 發送檔案內容
-                sent = 0
-                with open(filepath, 'rb') as f:
-                    while sent < filesize:
-                        chunk = f.read(FILE_CHUNK_SIZE)
-                        if not chunk:
-                            break
-                        sock.send(chunk)
-                        sent += len(chunk)
+                # 進度回調
+                def progress_callback(sent, total, speed, remaining):
+                    if self.on_progress:
+                        progress = (sent / total) * 100
+                        speed_mb = speed / (1024 * 1024)
+                        time_str = self._format_time(remaining)
+                        self.on_progress(progress, f"{filename} ({speed_mb:.1f} MB/s, {time_str})")
 
-                        # 更新進度
-                        if self.on_progress:
-                            progress = (sent / filesize) * 100
-                            self.on_progress(progress, f"發送中: {filename}")
+                # 使用高效發送
+                self._send_file_data(sock, filepath, filesize, progress_callback)
 
                 # 等待確認
                 sock.settimeout(30)
@@ -292,8 +357,11 @@ class TransferClient:
                 # 建立連接
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 optimize_socket(sock)
-                sock.settimeout(60)
+                sock.settimeout(300)  # 5 分鐘超時
                 sock.connect((target_ip, TRANSFER_PORT))
+
+                # 傳輸時間追蹤
+                transfer_start_time = time.time()
 
                 # 發送 FOLDER_START
                 header = {
@@ -364,28 +432,76 @@ class TransferClient:
                     if response != RESP_ACK_STRIPPED:
                         raise Exception(f"檔案 {rel_path} 未收到確認: {response}")
 
-                    # 發送檔案內容
+                    # 發送檔案內容 (使用高效發送或 fallback)
                     file_sent = 0
-                    with open(filepath, 'rb') as f:
-                        while file_sent < filesize:
-                            if self._cancel_folder_transfer:
-                                raise Exception("傳輸已取消")
+                    file_start_time = time.time()
 
-                            chunk = f.read(FILE_CHUNK_SIZE)
-                            if not chunk:
-                                break
-                            sock.send(chunk)
-                            file_sent += len(chunk)
+                    if HAS_SENDFILE and filesize > 0:
+                        # 使用 zero-copy sendfile
+                        with open(filepath, 'rb') as f:
+                            fd = f.fileno()
+                            sock_fd = sock.fileno()
+                            while file_sent < filesize:
+                                if self._cancel_folder_transfer:
+                                    raise Exception("傳輸已取消")
+                                try:
+                                    chunk_to_send = min(filesize - file_sent, 0x7FFFFFFF)
+                                    n = _sendfile(sock_fd, fd, file_sent, chunk_to_send)
+                                    if n == 0:
+                                        break
+                                    file_sent += n
 
-                            # 更新進度
-                            file_progress = (file_sent / filesize) * 100 if filesize > 0 else 100
-                            overall_progress = ((sent_size + file_sent) / total_size) * 100 if total_size > 0 else 100
+                                    # 更新進度
+                                    file_progress = (file_sent / filesize) * 100
+                                    overall_progress = ((sent_size + file_sent) / total_size) * 100 if total_size > 0 else 100
 
-                            if self.on_folder_progress:
-                                self.on_folder_progress(idx + 1, total_files, rel_path, file_progress, overall_progress, "sending")
+                                    # 計算速度和剩餘時間
+                                    elapsed = time.time() - transfer_start_time
+                                    total_sent_now = sent_size + file_sent
+                                    speed = total_sent_now / elapsed if elapsed > 0 else 0
+                                    remaining_bytes = total_size - total_sent_now
+                                    remaining_time = remaining_bytes / speed if speed > 0 else 0
+                                    speed_mb = speed / (1024 * 1024)
+                                    time_str = self._format_time(remaining_time)
 
-                            if self.on_progress:
-                                self.on_progress(overall_progress, f"({idx + 1}/{total_files}) {rel_path}")
+                                    if self.on_folder_progress:
+                                        self.on_folder_progress(idx + 1, total_files, rel_path, file_progress, overall_progress, "sending")
+
+                                    if self.on_progress:
+                                        self.on_progress(overall_progress, f"({idx + 1}/{total_files}) {rel_path} ({speed_mb:.1f} MB/s, {time_str})")
+                                except BlockingIOError:
+                                    continue
+                    else:
+                        # Fallback: 普通 read/send
+                        with open(filepath, 'rb') as f:
+                            while file_sent < filesize:
+                                if self._cancel_folder_transfer:
+                                    raise Exception("傳輸已取消")
+
+                                chunk = f.read(FILE_CHUNK_SIZE)
+                                if not chunk:
+                                    break
+                                sock.sendall(chunk)
+                                file_sent += len(chunk)
+
+                                # 更新進度
+                                file_progress = (file_sent / filesize) * 100 if filesize > 0 else 100
+                                overall_progress = ((sent_size + file_sent) / total_size) * 100 if total_size > 0 else 100
+
+                                # 計算速度和剩餘時間
+                                elapsed = time.time() - transfer_start_time
+                                total_sent_now = sent_size + file_sent
+                                speed = total_sent_now / elapsed if elapsed > 0 else 0
+                                remaining_bytes = total_size - total_sent_now
+                                remaining_time = remaining_bytes / speed if speed > 0 else 0
+                                speed_mb = speed / (1024 * 1024)
+                                time_str = self._format_time(remaining_time)
+
+                                if self.on_folder_progress:
+                                    self.on_folder_progress(idx + 1, total_files, rel_path, file_progress, overall_progress, "sending")
+
+                                if self.on_progress:
+                                    self.on_progress(overall_progress, f"({idx + 1}/{total_files}) {rel_path} ({speed_mb:.1f} MB/s, {time_str})")
 
                     # 等待檔案傳輸確認
                     response = self._recv_response(sock)
