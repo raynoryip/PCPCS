@@ -141,7 +141,9 @@ class DiagnosticSystem:
         import socket
         results = {
             "udp_52525": False,
-            "tcp_52526": False
+            "tcp_52526": False,
+            "udp_52525_in_use": False,
+            "tcp_52526_in_use": False
         }
 
         # 檢查 UDP 52525
@@ -149,22 +151,24 @@ class DiagnosticSystem:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.bind(('', 52525))
             sock.close()
-            results["udp_52525"] = True
+            results["udp_52525"] = True  # 端口空閒
         except OSError as e:
-            if "Address already in use" in str(e) or "Only one usage" in str(e):
-                results["udp_52525"] = True  # 已被 PCPCS 使用
-                results["udp_52525_note"] = "端口已被佔用(可能是PCPCS)"
+            err_str = str(e)
+            if "Address already in use" in err_str or "Only one usage" in err_str or "10048" in err_str:
+                results["udp_52525"] = True  # 端口可用，只是已被使用
+                results["udp_52525_in_use"] = True
 
         # 檢查 TCP 52526
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.bind(('', 52526))
             sock.close()
-            results["tcp_52526"] = True
+            results["tcp_52526"] = True  # 端口空閒
         except OSError as e:
-            if "Address already in use" in str(e) or "Only one usage" in str(e):
-                results["tcp_52526"] = True
-                results["tcp_52526_note"] = "端口已被佔用(可能是PCPCS)"
+            err_str = str(e)
+            if "Address already in use" in err_str or "Only one usage" in err_str or "10048" in err_str:
+                results["tcp_52526"] = True  # 端口可用，只是已被使用
+                results["tcp_52526_in_use"] = True
 
         return results
 
@@ -995,27 +999,27 @@ class PCPCSApp:
 
                 # 端口狀態 - 更清楚的說明
                 ports = results.get("port_status", {})
-                result_text.insert(tk.END, f"\n端口狀態 (本機監聽):\n")
+                result_text.insert(tk.END, f"\n端口狀態 (本機):\n")
 
                 udp_status = ports.get('udp_52525')
-                udp_note = ports.get('udp_52525_note', '')
+                udp_in_use = ports.get('udp_52525_in_use', False)
                 if udp_status:
-                    if udp_note:
-                        result_text.insert(tk.END, f"  UDP 52525: ✓ 正在使用中 (PCPCS 已監聽)\n")
+                    if udp_in_use:
+                        result_text.insert(tk.END, f"  UDP 52525: ✓ PCPCS 正在監聽中 (正常)\n")
                     else:
-                        result_text.insert(tk.END, f"  UDP 52525: ✓ 可用\n")
+                        result_text.insert(tk.END, f"  UDP 52525: ✓ 端口可用\n")
                 else:
-                    result_text.insert(tk.END, f"  UDP 52525: ✗ 被其他程式佔用\n")
+                    result_text.insert(tk.END, f"  UDP 52525: ✗ 無法使用\n")
 
                 tcp_status = ports.get('tcp_52526')
-                tcp_note = ports.get('tcp_52526_note', '')
+                tcp_in_use = ports.get('tcp_52526_in_use', False)
                 if tcp_status:
-                    if tcp_note:
-                        result_text.insert(tk.END, f"  TCP 52526: ✓ 正在使用中 (PCPCS 已監聽)\n")
+                    if tcp_in_use:
+                        result_text.insert(tk.END, f"  TCP 52526: ✓ PCPCS 正在監聽中 (正常)\n")
                     else:
-                        result_text.insert(tk.END, f"  TCP 52526: ✓ 可用\n")
+                        result_text.insert(tk.END, f"  TCP 52526: ✓ 端口可用\n")
                 else:
-                    result_text.insert(tk.END, f"  TCP 52526: ✗ 被其他程式佔用\n")
+                    result_text.insert(tk.END, f"  TCP 52526: ✗ 無法使用\n")
 
                 # 防火牆狀態
                 result_text.insert(tk.END, f"\n防火牆狀態: {fw.get('status', 'unknown')}\n")
