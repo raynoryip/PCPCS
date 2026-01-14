@@ -13,8 +13,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.config import (
     TRANSFER_PORT, BUFFER_SIZE, FILE_CHUNK_SIZE, RECEIVE_DIR,
-    MSG_TYPE_TEXT, MSG_TYPE_FILE, MSG_TYPE_FILE_CHUNK, MSG_TYPE_FILE_END
+    MSG_TYPE_TEXT, MSG_TYPE_FILE, MSG_TYPE_FILE_CHUNK, MSG_TYPE_FILE_END,
+    MSG_TYPE_FOLDER_START, MSG_TYPE_FOLDER_FILE, MSG_TYPE_FOLDER_END,
+    RESP_ACK, RESP_SKIP, RESP_ERROR
 )
+import hashlib
 
 
 class TransferServer:
@@ -23,11 +26,15 @@ class TransferServer:
     def __init__(self,
                  on_text_received: Optional[Callable] = None,
                  on_file_received: Optional[Callable] = None,
+                 on_folder_received: Optional[Callable] = None,
                  on_progress: Optional[Callable] = None,
+                 on_folder_progress: Optional[Callable] = None,
                  on_status: Optional[Callable] = None):
         self.on_text_received = on_text_received
         self.on_file_received = on_file_received
+        self.on_folder_received = on_folder_received  # (sender_ip, sender_name, folder_path, total_files, total_size)
         self.on_progress = on_progress
+        self.on_folder_progress = on_folder_progress  # (current_file, total_files, file_name, file_progress, overall_progress, status)
         self.on_status = on_status
 
         self.running = False
@@ -113,11 +120,13 @@ class TransferServer:
 
             if msg_type == MSG_TYPE_TEXT:
                 self._handle_text(client_socket, header, client_ip)
+                client_socket.send(b"OK")
             elif msg_type == MSG_TYPE_FILE:
                 self._handle_file(client_socket, header, client_ip)
-
-            # 發送確認
-            client_socket.send(b"OK")
+                client_socket.send(b"OK")
+            elif msg_type == MSG_TYPE_FOLDER_START:
+                self._handle_folder(client_socket, header, client_ip)
+                # folder handler sends its own responses
 
         except Exception as e:
             self._log(f"處理客戶端錯誤: {e}")
@@ -195,6 +204,166 @@ class TransferServer:
             # 刪除不完整的檔案
             if os.path.exists(filepath):
                 os.remove(filepath)
+
+    def _calculate_file_hash(self, filepath: str) -> str:
+        """計算檔案的 MD5 hash"""
+        hash_md5 = hashlib.md5()
+        with open(filepath, 'rb') as f:
+            for chunk in iter(lambda: f.read(FILE_CHUNK_SIZE), b''):
+                hash_md5.update(chunk)
+        return hash_md5.hexdigest()
+
+    def _handle_folder(self, sock: socket.socket, header: dict, sender_ip: str):
+        """處理資料夾傳輸"""
+        folder_name = header.get("folder_name", "unknown_folder")
+        total_files = header.get("total_files", 0)
+        total_size = header.get("total_size", 0)
+        sender_name = header.get("sender", sender_ip)
+        sender_platform = header.get("platform", "Unknown")
+
+        # 安全處理資料夾名稱
+        safe_folder_name = os.path.basename(folder_name)
+
+        # 建立接收資料夾
+        folder_path = os.path.join(RECEIVE_DIR, safe_folder_name)
+
+        # 如果資料夾已存在，添加編號
+        base_folder = folder_path
+        counter = 1
+        while os.path.exists(folder_path):
+            folder_path = f"{base_folder}_{counter}"
+            counter += 1
+
+        os.makedirs(folder_path, exist_ok=True)
+
+        self._log(f"開始接收資料夾: {safe_folder_name} ({total_files} 檔案, {total_size} bytes)")
+
+        # 發送 ACK
+        sock.send(RESP_ACK.encode('utf-8'))
+
+        received_size = 0
+        received_files = 0
+
+        try:
+            while True:
+                # 接收下一個標頭
+                header_len_data = self._recv_exact(sock, 4)
+                if not header_len_data:
+                    raise Exception("連接中斷")
+
+                header_length = int.from_bytes(header_len_data, 'big')
+                header_json = self._recv_exact(sock, header_length)
+                if not header_json:
+                    raise Exception("連接中斷")
+
+                file_header = json.loads(header_json.decode('utf-8'))
+                msg_type = file_header.get("type")
+
+                if msg_type == MSG_TYPE_FOLDER_END:
+                    # 資料夾傳輸完成
+                    sock.send(RESP_ACK.encode('utf-8'))
+                    self._log(f"資料夾接收完成: {folder_path}")
+
+                    if self.on_folder_received:
+                        self.on_folder_received(sender_ip, sender_name, folder_path, received_files, received_size, sender_platform)
+                    break
+
+                elif msg_type == MSG_TYPE_FOLDER_FILE:
+                    # 接收單個檔案
+                    rel_path = file_header.get("rel_path", "unknown_file")
+                    filesize = file_header.get("size", 0)
+                    file_hash = file_header.get("hash", "")
+                    file_index = file_header.get("index", 0)
+                    file_total = file_header.get("total", total_files)
+
+                    # 安全處理相對路徑
+                    # 防止路徑穿越攻擊
+                    safe_rel_path = os.path.normpath(rel_path)
+                    if safe_rel_path.startswith('..') or os.path.isabs(safe_rel_path):
+                        safe_rel_path = os.path.basename(rel_path)
+
+                    filepath = os.path.join(folder_path, safe_rel_path)
+
+                    # 確保子目錄存在
+                    file_dir = os.path.dirname(filepath)
+                    if file_dir and not os.path.exists(file_dir):
+                        os.makedirs(file_dir, exist_ok=True)
+
+                    # 檢查檔案是否已存在且 hash 相同（用於續傳）
+                    if os.path.exists(filepath) and file_hash:
+                        existing_hash = self._calculate_file_hash(filepath)
+                        if existing_hash == file_hash:
+                            # 檔案已存在且相同，跳過
+                            sock.send(RESP_SKIP.encode('utf-8'))
+                            received_size += filesize
+                            received_files += 1
+
+                            overall_progress = (received_size / total_size) * 100 if total_size > 0 else 100
+                            if self.on_folder_progress:
+                                self.on_folder_progress(file_index, file_total, safe_rel_path, 100, overall_progress, "skipped")
+
+                            self._log(f"跳過 (已存在): {safe_rel_path}")
+                            continue
+
+                    # 發送 ACK，準備接收檔案
+                    sock.send(RESP_ACK.encode('utf-8'))
+
+                    # 接收檔案內容
+                    file_received = 0
+                    try:
+                        with open(filepath, 'wb') as f:
+                            while file_received < filesize:
+                                chunk_size = min(FILE_CHUNK_SIZE, filesize - file_received)
+                                chunk = self._recv_exact(sock, chunk_size)
+                                if not chunk:
+                                    raise Exception("連接中斷")
+
+                                f.write(chunk)
+                                file_received += len(chunk)
+
+                                # 更新進度
+                                file_progress = (file_received / filesize) * 100 if filesize > 0 else 100
+                                overall_progress = ((received_size + file_received) / total_size) * 100 if total_size > 0 else 100
+
+                                if self.on_folder_progress:
+                                    self.on_folder_progress(file_index, file_total, safe_rel_path, file_progress, overall_progress, "receiving")
+
+                                if self.on_progress:
+                                    self.on_progress(overall_progress, f"({file_index}/{file_total}) {safe_rel_path}")
+
+                        # 驗證 hash
+                        if file_hash:
+                            received_hash = self._calculate_file_hash(filepath)
+                            if received_hash != file_hash:
+                                os.remove(filepath)
+                                raise Exception(f"檔案 {safe_rel_path} hash 驗證失敗")
+
+                        # 發送檔案接收確認
+                        sock.send(RESP_ACK.encode('utf-8'))
+
+                        received_size += filesize
+                        received_files += 1
+
+                        overall_progress = (received_size / total_size) * 100 if total_size > 0 else 100
+                        if self.on_folder_progress:
+                            self.on_folder_progress(file_index, file_total, safe_rel_path, 100, overall_progress, "completed")
+
+                        self._log(f"接收完成 ({file_index}/{file_total}): {safe_rel_path}")
+
+                    except Exception as e:
+                        # 刪除不完整的檔案
+                        if os.path.exists(filepath):
+                            os.remove(filepath)
+                        raise e
+
+                else:
+                    # 未知訊息類型
+                    self._log(f"未知訊息類型: {msg_type}")
+                    sock.send(RESP_ERROR.encode('utf-8'))
+
+        except Exception as e:
+            self._log(f"資料夾接收失敗: {e}")
+            sock.send(RESP_ERROR.encode('utf-8'))
 
 
 if __name__ == "__main__":

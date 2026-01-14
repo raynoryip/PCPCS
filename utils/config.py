@@ -21,6 +21,16 @@ MSG_TYPE_FILE = "FILE"
 MSG_TYPE_FILE_CHUNK = "FILE_CHUNK"
 MSG_TYPE_FILE_END = "FILE_END"
 
+# 資料夾傳輸訊息類型
+MSG_TYPE_FOLDER_START = "FOLDER_START"
+MSG_TYPE_FOLDER_FILE = "FOLDER_FILE"
+MSG_TYPE_FOLDER_END = "FOLDER_END"
+
+# 回應類型
+RESP_ACK = "ACK"
+RESP_SKIP = "SKIP"
+RESP_ERROR = "ERROR"
+
 # 取得本機資訊
 def get_hostname():
     return socket.gethostname()

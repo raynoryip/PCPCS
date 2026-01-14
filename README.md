@@ -14,6 +14,7 @@ A cross-platform P2P LAN communication tool that enables real-time text and file
 - **Ping Test** - Automatically tests connection status and displays latency
 - **Text Transfer** - Real-time text transmission with auto-copy to clipboard on receive
 - **File Transfer** - Supports files of any size with progress bar display
+- **Folder Transfer** - Send entire folders with per-file progress, resume support for interrupted transfers, and automatic skip for identical files
 - **Cross-Platform** - Works on Linux/Windows/macOS without installation
 - **Bilingual UI** - Supports Traditional Chinese and English interface
 - **No Dependencies** - Uses only Python standard library (no pip install required)
@@ -104,6 +105,7 @@ The GUI displays:
 - **Ping 測試** - 自動測試連接狀態，顯示延遲時間
 - **文字傳輸** - 即時傳輸文字，接收後自動複製到剪貼簿
 - **檔案傳輸** - 支援任意大小檔案，有進度條顯示
+- **資料夾傳輸** - 發送整個資料夾，支援逐檔案進度顯示、中斷續傳、自動跳過相同檔案
 - **跨平台** - Linux/Windows/macOS 都能運行，無需安裝
 - **雙語介面** - 支援繁體中文和英文介面
 - **無依賴** - 只使用 Python 標準庫（無需 pip install）

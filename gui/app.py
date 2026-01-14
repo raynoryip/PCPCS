@@ -150,6 +150,20 @@ LANG = {
         "solution_none": "網路設定看起來正常。如果仍無法連接，請確認目標電腦也在運行 PCPCS。",
         "copyright": "© 2025 Perspic AI Engineering Limited",
         "website": "perspic.net",
+        "send_folder": "發送資料夾",
+        "select_folder_title": "選擇要發送的資料夾",
+        "select_valid_folder": "請選擇有效的資料夾",
+        "sending_folder": "正在發送資料夾...",
+        "folder_empty": "資料夾是空的",
+        "folder_send_success": "資料夾 {name} 發送成功 ({count} 個檔案)",
+        "folder_send_fail": "資料夾發送失敗: {msg}",
+        "received_folder": "收到資料夾: {name} ({count} 個檔案)",
+        "folder_received_title": "收到資料夾 - {name}",
+        "folder_received_msg": "資料夾: {foldername}\n檔案數: {count}\n總大小: {size}\n\n是否開啟資料夾?",
+        "folder_progress": "({current}/{total}) {filename}",
+        "file_skipped": "已跳過 (相同檔案)",
+        "cancel_transfer": "取消傳輸",
+        "transfer_cancelled": "傳輸已取消",
     },
     "en": {
         "window_title": "PCPCS",
@@ -256,6 +270,20 @@ LANG = {
         "solution_none": "Network settings look fine. If you still can't connect, make sure PCPCS is running on the target computer.",
         "copyright": "© 2025 Perspic AI Engineering Limited",
         "website": "perspic.net",
+        "send_folder": "Send Folder",
+        "select_folder_title": "Select folder to send",
+        "select_valid_folder": "Please select a valid folder",
+        "sending_folder": "Sending folder...",
+        "folder_empty": "Folder is empty",
+        "folder_send_success": "Folder {name} sent successfully ({count} files)",
+        "folder_send_fail": "Folder send failed: {msg}",
+        "received_folder": "Folder received: {name} ({count} files)",
+        "folder_received_title": "Folder Received - {name}",
+        "folder_received_msg": "Folder: {foldername}\nFiles: {count}\nTotal size: {size}\n\nOpen the folder?",
+        "folder_progress": "({current}/{total}) {filename}",
+        "file_skipped": "Skipped (identical file)",
+        "cancel_transfer": "Cancel Transfer",
+        "transfer_cancelled": "Transfer cancelled",
     }
 }
 
@@ -659,14 +687,20 @@ class PCPCSApp:
         self.server = TransferServer(
             on_text_received=self._on_text_received,
             on_file_received=self._on_file_received,
+            on_folder_received=self._on_folder_received,
             on_progress=self._on_receive_progress,
+            on_folder_progress=self._on_folder_receive_progress,
             on_status=self._log
         )
         self.client = TransferClient(
             on_progress=self._on_send_progress,
             on_status=self._log,
-            on_complete=self._on_send_complete
+            on_complete=self._on_send_complete,
+            on_folder_progress=self._on_folder_send_progress
         )
+
+        # 資料夾傳輸狀態
+        self.folder_transfer_active = False
 
         # 傳輸追蹤
         self.transfer_start_time = None
@@ -970,7 +1004,11 @@ class PCPCSApp:
 
         self.send_file_btn = ttk.Button(file_select_frame, text=L("send_file"),
                                        command=self._send_file, style='Primary.TButton')
-        self.send_file_btn.pack(side=tk.LEFT)
+        self.send_file_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.send_folder_btn = ttk.Button(file_select_frame, text=L("send_folder"),
+                                         command=self._send_folder, style='Primary.TButton')
+        self.send_folder_btn.pack(side=tk.LEFT)
 
         # 進度條
         progress_frame = ttk.Frame(self.file_labelframe, style='Card.TFrame')
@@ -981,8 +1019,17 @@ class PCPCSApp:
                                            style='Blue.Horizontal.TProgressbar')
         self.progress_bar.pack(fill=tk.X)
 
-        self.progress_label = ttk.Label(progress_frame, text="", style='Info.TLabel')
-        self.progress_label.pack(anchor='w', pady=(4, 0))
+        # 詳細進度資訊 (用於資料夾傳輸)
+        self.progress_detail_frame = ttk.Frame(progress_frame, style='Card.TFrame')
+        self.progress_detail_frame.pack(fill=tk.X, pady=(4, 0))
+
+        self.progress_label = ttk.Label(self.progress_detail_frame, text="", style='Info.TLabel')
+        self.progress_label.pack(side=tk.LEFT, anchor='w')
+
+        self.cancel_btn = ttk.Button(self.progress_detail_frame, text=L("cancel_transfer"),
+                                    command=self._cancel_folder_transfer, style='Secondary.TButton')
+        self.cancel_btn.pack(side=tk.RIGHT)
+        self.cancel_btn.pack_forget()  # 預設隱藏
 
         # 系統日誌
         self.log_labelframe = ttk.LabelFrame(right_frame, text=f"  {L('system_log')}  ",
@@ -1421,6 +1468,97 @@ class PCPCSApp:
         self.progress_var.set(0)
         self.client.send_file(self.selected_peer_ip, filepath)
 
+    def _browse_folder(self):
+        """選擇要發送的資料夾"""
+        folder_path = filedialog.askdirectory(title=self._t("select_folder_title"))
+        if folder_path:
+            self.file_path_var.set(folder_path)
+
+    def _send_folder(self):
+        """發送資料夾"""
+        if not self.selected_peer_ip:
+            messagebox.showwarning(self._t("hint"), self._t("select_target_first"))
+            return
+
+        # 先讓使用者選擇資料夾
+        folder_path = filedialog.askdirectory(title=self._t("select_folder_title"))
+        if not folder_path:
+            return
+
+        if not os.path.isdir(folder_path):
+            messagebox.showwarning(self._t("hint"), self._t("select_valid_folder"))
+            return
+
+        # 計算資料夾總大小
+        total_size = 0
+        file_count = 0
+        for root, dirs, files in os.walk(folder_path):
+            for f in files:
+                total_size += os.path.getsize(os.path.join(root, f))
+                file_count += 1
+
+        if file_count == 0:
+            messagebox.showwarning(self._t("hint"), self._t("folder_empty"))
+            return
+
+        self.transfer_size = total_size
+        self.transfer_start_time = time.time()
+        self.folder_transfer_active = True
+
+        self._log(self._t("sending_folder"))
+        self.send_file_btn.config(state='disabled')
+        self.send_folder_btn.config(state='disabled')
+        self.cancel_btn.pack(side=tk.RIGHT)  # 顯示取消按鈕
+        self.progress_var.set(0)
+
+        # 保存資料夾路徑供完成時使用
+        self._current_folder_path = folder_path
+        self._current_folder_files = file_count
+
+        self.client.send_folder(self.selected_peer_ip, folder_path)
+
+    def _cancel_folder_transfer(self):
+        """取消資料夾傳輸"""
+        self.client.cancel_folder_transfer()
+        self._log(self._t("transfer_cancelled"))
+
+    def _on_folder_send_progress(self, current: int, total: int, filename: str, file_progress: float, overall_progress: float, status: str):
+        """資料夾發送進度回調"""
+        self.root.after(0, lambda: self._update_folder_progress(current, total, filename, file_progress, overall_progress, status, "send"))
+
+    def _on_folder_receive_progress(self, current: int, total: int, filename: str, file_progress: float, overall_progress: float, status: str):
+        """資料夾接收進度回調"""
+        self.root.after(0, lambda: self._update_folder_progress(current, total, filename, file_progress, overall_progress, status, "receive"))
+
+    def _update_folder_progress(self, current: int, total: int, filename: str, file_progress: float, overall_progress: float, status: str, direction: str):
+        """更新資料夾傳輸進度顯示"""
+        self.progress_var.set(overall_progress)
+
+        # 狀態圖示
+        status_icon = ""
+        if status == "completed":
+            status_icon = "✓ "
+        elif status == "skipped":
+            status_icon = "⊘ "
+        elif status == "sending" or status == "receiving":
+            status_icon = "↑ " if direction == "send" else "↓ "
+
+        # 計算速度
+        speed_str = ""
+        if self.transfer_start_time and self.transfer_size > 0:
+            elapsed = time.time() - self.transfer_start_time
+            if elapsed > 0:
+                speed = (overall_progress / 100 * self.transfer_size) / elapsed
+                speed_str = f" | {self._format_size(speed)}/s"
+
+        # 顯示格式：(3/10) filename.txt [78%]
+        progress_text = f"{status_icon}({current}/{total}) {filename}"
+        if status in ["sending", "receiving"]:
+            progress_text += f" [{file_progress:.0f}%]"
+        progress_text += f" - {overall_progress:.1f}%{speed_str}"
+
+        self.progress_label.config(text=progress_text)
+
     def _on_send_progress(self, progress: float, message: str):
         self.root.after(0, lambda: self._update_progress(progress, message))
 
@@ -1445,6 +1583,8 @@ class PCPCSApp:
     def _handle_send_complete(self, success: bool, message: str):
         self.send_btn.config(state='normal')
         self.send_file_btn.config(state='normal')
+        self.send_folder_btn.config(state='normal')
+        self.cancel_btn.pack_forget()  # 隱藏取消按鈕
         self.progress_var.set(100 if success else 0)
 
         speed_str = ""
@@ -1458,7 +1598,19 @@ class PCPCSApp:
 
         if success:
             self._log(f"{self._t('send_success')} {speed_str}")
-            if "檔案" in message or "file" in message.lower():
+
+            # 資料夾傳輸完成
+            if self.folder_transfer_active:
+                folder_name = os.path.basename(getattr(self, '_current_folder_path', ''))
+                file_count = getattr(self, '_current_folder_files', 0)
+                self._add_chat_message(
+                    get_hostname(),
+                    f"📁 {folder_name} ({file_count} files)",
+                    is_file=True,
+                    file_info={"size": self.transfer_size, "speed": speed_str}
+                )
+                self.folder_transfer_active = False
+            elif "檔案" in message or "file" in message.lower():
                 filename = self.file_path_var.get()
                 if filename:
                     self._add_chat_message(
@@ -1469,6 +1621,7 @@ class PCPCSApp:
                     )
         else:
             self._log(self._t("send_fail", msg=message))
+            self.folder_transfer_active = False
 
         self.transfer_start_time = None
         self.transfer_size = 0
@@ -1518,6 +1671,49 @@ class PCPCSApp:
         )
         if result:
             self._open_receive_folder()
+
+    def _on_folder_received(self, sender_ip: str, sender_name: str, folder_path: str, total_files: int, total_size: int, sender_platform: str = "Unknown"):
+        """資料夾接收完成回調"""
+        self.root.after(0, lambda: self._handle_folder_received(sender_ip, sender_name, folder_path, total_files, total_size, sender_platform))
+
+    def _handle_folder_received(self, sender_ip: str, sender_name: str, folder_path: str, total_files: int, total_size: int, sender_platform: str = "Unknown"):
+        """處理資料夾接收完成"""
+        self._ensure_peer_exists(sender_ip, sender_name, sender_platform)
+
+        folder_name = os.path.basename(folder_path)
+        size_str = self._format_size(total_size)
+
+        file_info = {"size": total_size, "path": folder_path, "file_count": total_files}
+
+        if self.selected_peer_ip == sender_ip:
+            self._add_chat_message(sender_name, f"📁 {folder_name} ({total_files} files)", is_file=True, file_info=file_info)
+        else:
+            self.chat_history.save_message(sender_ip, sender_name, f"📁 {folder_name} ({total_files} files)", is_file=True, file_info=file_info)
+
+        self._log(self._t("received_folder", name=folder_name, count=total_files))
+
+        # 重設進度條
+        self.progress_var.set(0)
+        self.progress_label.config(text="")
+
+        result = messagebox.askyesno(
+            self._t("folder_received_title", name=sender_name),
+            self._t("folder_received_msg", foldername=folder_name, count=total_files, size=size_str)
+        )
+        if result:
+            self._open_folder(folder_path)
+
+    def _open_folder(self, folder_path: str):
+        """開啟指定資料夾"""
+        import platform
+        import subprocess
+
+        if platform.system() == "Windows":
+            os.startfile(folder_path)
+        elif platform.system() == "Darwin":
+            subprocess.run(["open", folder_path])
+        else:
+            subprocess.run(["xdg-open", folder_path])
 
     def _open_receive_folder(self):
         os.makedirs(RECEIVE_DIR, exist_ok=True)
