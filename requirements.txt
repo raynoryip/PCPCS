@@ -3,6 +3,9 @@
 # 可選套件 (增強 UI 體驗):
 Pillow>=9.0.0  # Logo 顯示，可選安裝
 #
+# 打包用 (僅開發者需要):
+# PyInstaller>=5.0  # 打包成獨立可執行檔
+#
 # 需要的標準庫:
 # - tkinter (GUI) - Linux 可能需要: sudo apt install python3-tk
 # - socket (網路)
@@ -12,3 +15,18 @@ Pillow>=9.0.0  # Logo 顯示，可選安裝
 # - os, sys, platform (系統操作)
 #
 # Python 版本需求: >= 3.7
+#
+# ============================================
+# 打包說明 (Build Instructions)
+# ============================================
+#
+# 方法一: 使用 Python 打包腳本 (推薦)
+#   python build.py
+#
+# 方法二: 使用平台專用腳本
+#   Windows: build_scripts\build_windows.bat
+#   Linux:   build_scripts/build_linux.sh
+#   macOS:   build_scripts/build_mac.sh
+#
+# 打包後的檔案在 dist/ 目錄，可直接分發給用戶
+# 用戶無需安裝 Python 或任何依賴即可運行

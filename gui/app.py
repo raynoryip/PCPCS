@@ -11,7 +11,13 @@ import sys
 import json
 import datetime
 import time
-from PIL import Image, ImageTk
+
+# PIL 是可選的，用於顯示 Logo
+try:
+    from PIL import Image, ImageTk
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
 
 # 添加專案路徑
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -775,6 +781,10 @@ class PCPCSApp:
 
     def _load_logo(self):
         """載入 Perspic Logo"""
+        if not PIL_AVAILABLE:
+            self.logo_image = None
+            return
+
         try:
             logo_path = os.path.join(ASSETS_DIR, "logo.png")
             if os.path.exists(logo_path):
@@ -1660,11 +1670,8 @@ class PCPCSApp:
 
 
 def main():
-    # 檢查 PIL 是否可用，如果不可用則使用簡化版
-    try:
-        from PIL import Image, ImageTk
-    except ImportError:
-        print("提示: 安裝 Pillow 可獲得更好的 UI 體驗 (pip install Pillow)")
+    if not PIL_AVAILABLE:
+        print("提示: 安裝 Pillow 可顯示 Logo (pip install Pillow)")
 
     app = PCPCSApp()
     app.run()
