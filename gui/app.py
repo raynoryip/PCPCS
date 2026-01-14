@@ -82,6 +82,10 @@ class PCPCSApp:
         ping_btn = ttk.Button(left_frame, text="測試連接 (Ping)", command=self._manual_ping)
         ping_btn.pack(fill=tk.X, pady=(5, 0))
 
+        # 手動添加 IP
+        add_ip_btn = ttk.Button(left_frame, text="手動添加 IP", command=self._manual_add_ip)
+        add_ip_btn.pack(fill=tk.X, pady=(5, 0))
+
         # 本機資訊
         info_frame = ttk.Frame(left_frame)
         info_frame.pack(fill=tk.X, pady=(10, 0))
@@ -168,7 +172,7 @@ class PCPCSApp:
             ping_str = f"{peer.ping_ms:.0f}ms" if peer.ping_ms else "---"
             display = f"[{status}] {peer.hostname} ({peer.platform})"
             display += f"\n    {ip} | {ping_str}"
-            self.peer_listbox.insert(tk.END, f"{peer.hostname} | {ip} | {ping_str} [{status}]")
+            self.peer_listbox.insert(tk.END, f"{peer.hostname} | {ip} | {peer.platform} | {ping_str} [{status}]")
 
         # 恢復選擇
         if current_selection:
@@ -213,6 +217,45 @@ class PCPCSApp:
                 self._log(f"Ping {self.selected_peer_ip}: 無回應 - 連接失敗")
 
         threading.Thread(target=do_ping, daemon=True).start()
+
+    def _manual_add_ip(self):
+        """手動添加 IP 地址"""
+        from tkinter import simpledialog
+
+        ip = simpledialog.askstring(
+            "手動添加 IP",
+            "請輸入目標電腦的 IP 地址:",
+            parent=self.root
+        )
+
+        if ip and ip.strip():
+            ip = ip.strip()
+            self._log(f"正在嘗試連接 {ip}...")
+
+            def try_connect():
+                # 先 ping 測試
+                ping_result = self.discovery.manual_ping(ip)
+
+                if ping_result:
+                    # 添加到 peers
+                    from network.discovery import PeerInfo
+                    peer = PeerInfo(ip, f"Manual-{ip}", "Unknown")
+                    peer.ping_ms = ping_result
+                    peer.is_reachable = True
+                    self.discovery.peers[ip] = peer
+
+                    self._log(f"成功添加 {ip} (Ping: {ping_result:.1f}ms)")
+                    self.root.after(0, lambda: self._update_peer_list(self.discovery.peers))
+                else:
+                    self._log(f"無法連接到 {ip}")
+                    # 仍然添加，讓用戶可以嘗試
+                    from network.discovery import PeerInfo
+                    peer = PeerInfo(ip, f"Manual-{ip}", "Unknown")
+                    peer.is_reachable = False
+                    self.discovery.peers[ip] = peer
+                    self.root.after(0, lambda: self._update_peer_list(self.discovery.peers))
+
+            threading.Thread(target=try_connect, daemon=True).start()
 
     def _browse_file(self):
         """選擇檔案"""
