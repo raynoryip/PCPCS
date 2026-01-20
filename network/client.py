@@ -466,45 +466,78 @@ class TransferClient:
         計算檔案的 hash
         quick=True: 只讀取檔案頭尾各 64KB + 檔案大小，速度快但不完全精確
         quick=False: 完整 MD5 hash，精確但慢
-        """
-        filesize = os.path.getsize(filepath)
 
-        if quick:
-            # 快速 hash：檔案大小 + 頭尾各 64KB
-            hash_data = str(filesize).encode()
-            with open(filepath, 'rb') as f:
-                # 讀取頭部
-                hash_data += f.read(65536)
-                # 讀取尾部
-                if filesize > 65536:
-                    f.seek(-65536, 2)
+        如果檔案無法讀取，返回空字串
+        """
+        try:
+            # 檢查檔案是否可讀
+            if not os.path.exists(filepath) or not os.access(filepath, os.R_OK):
+                return ""
+
+            filesize = os.path.getsize(filepath)
+
+            if quick:
+                # 快速 hash：檔案大小 + 頭尾各 64KB
+                hash_data = str(filesize).encode()
+                with open(filepath, 'rb') as f:
+                    # 讀取頭部
                     hash_data += f.read(65536)
-            return hashlib.md5(hash_data).hexdigest()
-        else:
-            # 完整 MD5
-            hash_md5 = hashlib.md5()
-            with open(filepath, 'rb') as f:
-                for chunk in iter(lambda: f.read(FILE_CHUNK_SIZE), b''):
-                    hash_md5.update(chunk)
-            return hash_md5.hexdigest()
+                    # 讀取尾部
+                    if filesize > 65536:
+                        f.seek(-65536, 2)
+                        hash_data += f.read(65536)
+                return hashlib.md5(hash_data).hexdigest()
+            else:
+                # 完整 MD5
+                hash_md5 = hashlib.md5()
+                with open(filepath, 'rb') as f:
+                    for chunk in iter(lambda: f.read(FILE_CHUNK_SIZE), b''):
+                        hash_md5.update(chunk)
+                return hash_md5.hexdigest()
+        except (OSError, IOError) as e:
+            self._log(f"無法計算檔案 hash: {filepath} - {e}")
+            return ""
 
     def _get_folder_files(self, folder_path: str) -> list:
-        """取得資料夾內所有檔案的資訊"""
+        """取得資料夾內所有檔案的資訊（自動跳過損壞的 symlink 和不可讀檔案）"""
         files = []
-        folder_name = os.path.basename(folder_path)
+        skipped_count = 0
 
         for root, dirs, filenames in os.walk(folder_path):
             for filename in filenames:
                 filepath = os.path.join(root, filename)
-                # 計算相對路徑（相對於資料夾根目錄）
-                rel_path = os.path.relpath(filepath, folder_path)
-                filesize = os.path.getsize(filepath)
 
-                files.append({
-                    'filepath': filepath,
-                    'rel_path': rel_path,
-                    'size': filesize
-                })
+                # 跳過損壞的符號連結
+                if os.path.islink(filepath) and not os.path.exists(filepath):
+                    skipped_count += 1
+                    continue
+
+                # 跳過不存在或無法讀取的檔案
+                if not os.path.exists(filepath):
+                    skipped_count += 1
+                    continue
+
+                if not os.access(filepath, os.R_OK):
+                    skipped_count += 1
+                    continue
+
+                try:
+                    filesize = os.path.getsize(filepath)
+                    # 計算相對路徑（相對於資料夾根目錄）
+                    rel_path = os.path.relpath(filepath, folder_path)
+
+                    files.append({
+                        'filepath': filepath,
+                        'rel_path': rel_path,
+                        'size': filesize
+                    })
+                except (OSError, IOError):
+                    # 跳過無法取得大小的檔案
+                    skipped_count += 1
+                    continue
+
+        if skipped_count > 0:
+            self._log(f"已跳過 {skipped_count} 個無法讀取的檔案/連結")
 
         return files
 
@@ -595,8 +628,11 @@ class TransferClient:
 
                 self._log(f"開始發送資料夾: {folder_name} ({total_files} 檔案, {total_size} bytes)")
 
-                # 逐一發送檔案
+                # LocalSend 風格：追蹤單檔錯誤，但繼續傳輸其他檔案
                 sent_size = 0
+                failed_files = []  # 追蹤失敗的檔案
+                success_count = 0
+
                 for idx, file_info in enumerate(files):
                     if self._cancel_folder_transfer:
                         raise Exception("傳輸已取消")
@@ -608,63 +644,109 @@ class TransferClient:
                     # 檢查是否已完成（續傳）
                     if rel_path in completed_files:
                         sent_size += filesize
+                        success_count += 1
                         continue
 
-                    # 計算檔案 hash
-                    file_hash = self._calculate_file_hash(filepath)
-
-                    # 發送 FOLDER_FILE 標頭
-                    file_header = {
-                        "type": MSG_TYPE_FOLDER_FILE,
-                        "rel_path": rel_path,
-                        "size": filesize,
-                        "hash": file_hash,
-                        "index": idx + 1,
-                        "total": total_files
-                    }
-                    file_header_json = json.dumps(file_header).encode('utf-8')
-                    sock.send(len(file_header_json).to_bytes(4, 'big'))
-                    sock.send(file_header_json)
-
-                    # 等待回應（ACK 或 SKIP）
-                    response = self._recv_response(sock)
-
-                    if response == RESP_SKIP_STRIPPED:
-                        # 檔案已存在且 hash 相同，跳過
-                        self._log(f"跳過 (已存在): {rel_path}")
-                        sent_size += filesize
-                        completed_files.add(rel_path)
-
-                        # 更新進度
+                    # 單檔傳輸前驗證
+                    if not os.path.exists(filepath) or not os.access(filepath, os.R_OK):
+                        self._log(f"跳過 (無法讀取): {rel_path}")
+                        failed_files.append(rel_path)
+                        sent_size += filesize  # 仍計入進度
                         overall_progress = (sent_size / total_size) * 100 if total_size > 0 else 100
                         if self.on_folder_progress:
-                            self.on_folder_progress(idx + 1, total_files, rel_path, 100, overall_progress, "skipped")
+                            self.on_folder_progress(idx + 1, total_files, rel_path, 0, overall_progress, "error")
                         continue
 
-                    if response != RESP_ACK_STRIPPED:
-                        raise Exception(f"檔案 {rel_path} 未收到確認: {response}")
+                    try:
+                        # 計算檔案 hash
+                        file_hash = self._calculate_file_hash(filepath)
 
-                    # 發送檔案內容 (使用高效發送或 fallback)
-                    file_sent = 0
-                    file_start_time = time.time()
+                        # 發送 FOLDER_FILE 標頭
+                        file_header = {
+                            "type": MSG_TYPE_FOLDER_FILE,
+                            "rel_path": rel_path,
+                            "size": filesize,
+                            "hash": file_hash,
+                            "index": idx + 1,
+                            "total": total_files
+                        }
+                        file_header_json = json.dumps(file_header).encode('utf-8')
+                        sock.send(len(file_header_json).to_bytes(4, 'big'))
+                        sock.send(file_header_json)
 
-                    if HAS_SENDFILE and filesize > 0:
-                        # 使用 zero-copy sendfile
-                        with open(filepath, 'rb') as f:
-                            fd = f.fileno()
-                            sock_fd = sock.fileno()
-                            while file_sent < filesize:
-                                if self._cancel_folder_transfer:
-                                    raise Exception("傳輸已取消")
-                                try:
-                                    chunk_to_send = min(filesize - file_sent, 0x7FFFFFFF)
-                                    n = _sendfile(sock_fd, fd, file_sent, chunk_to_send)
-                                    if n == 0:
+                        # 等待回應（ACK 或 SKIP）
+                        response = self._recv_response(sock)
+
+                        if response == RESP_SKIP_STRIPPED:
+                            # 檔案已存在且 hash 相同，跳過
+                            self._log(f"跳過 (已存在): {rel_path}")
+                            sent_size += filesize
+                            completed_files.add(rel_path)
+                            success_count += 1
+
+                            # 更新進度
+                            overall_progress = (sent_size / total_size) * 100 if total_size > 0 else 100
+                            if self.on_folder_progress:
+                                self.on_folder_progress(idx + 1, total_files, rel_path, 100, overall_progress, "skipped")
+                            continue
+
+                        if response != RESP_ACK_STRIPPED:
+                            raise Exception(f"未收到確認: {response}")
+
+                        # 發送檔案內容 (使用高效發送或 fallback)
+                        file_sent = 0
+                        file_start_time = time.time()
+
+                        if HAS_SENDFILE and filesize > 0:
+                            # 使用 zero-copy sendfile
+                            with open(filepath, 'rb') as f:
+                                fd = f.fileno()
+                                sock_fd = sock.fileno()
+                                while file_sent < filesize:
+                                    if self._cancel_folder_transfer:
+                                        raise Exception("傳輸已取消")
+                                    try:
+                                        chunk_to_send = min(filesize - file_sent, 0x7FFFFFFF)
+                                        n = _sendfile(sock_fd, fd, file_sent, chunk_to_send)
+                                        if n == 0:
+                                            break
+                                        file_sent += n
+
+                                        # 更新進度
+                                        file_progress = (file_sent / filesize) * 100
+                                        overall_progress = ((sent_size + file_sent) / total_size) * 100 if total_size > 0 else 100
+
+                                        # 計算速度和剩餘時間
+                                        elapsed = time.time() - transfer_start_time
+                                        total_sent_now = sent_size + file_sent
+                                        speed = total_sent_now / elapsed if elapsed > 0 else 0
+                                        remaining_bytes = total_size - total_sent_now
+                                        remaining_time = remaining_bytes / speed if speed > 0 else 0
+                                        speed_mb = speed / (1024 * 1024)
+                                        time_str = self._format_time(remaining_time)
+
+                                        if self.on_folder_progress:
+                                            self.on_folder_progress(idx + 1, total_files, rel_path, file_progress, overall_progress, "sending")
+
+                                        if self.on_progress:
+                                            self.on_progress(overall_progress, f"({idx + 1}/{total_files}) {rel_path} ({speed_mb:.1f} MB/s, {time_str})")
+                                    except BlockingIOError:
+                                        continue
+                        else:
+                            # Fallback: 普通 read/send
+                            with open(filepath, 'rb') as f:
+                                while file_sent < filesize:
+                                    if self._cancel_folder_transfer:
+                                        raise Exception("傳輸已取消")
+
+                                    chunk = f.read(FILE_CHUNK_SIZE)
+                                    if not chunk:
                                         break
-                                    file_sent += n
+                                    sock.sendall(chunk)
+                                    file_sent += len(chunk)
 
                                     # 更新進度
-                                    file_progress = (file_sent / filesize) * 100
+                                    file_progress = (file_sent / filesize) * 100 if filesize > 0 else 100
                                     overall_progress = ((sent_size + file_sent) / total_size) * 100 if total_size > 0 else 100
 
                                     # 計算速度和剩餘時間
@@ -681,58 +763,37 @@ class TransferClient:
 
                                     if self.on_progress:
                                         self.on_progress(overall_progress, f"({idx + 1}/{total_files}) {rel_path} ({speed_mb:.1f} MB/s, {time_str})")
-                                except BlockingIOError:
-                                    continue
-                    else:
-                        # Fallback: 普通 read/send
-                        with open(filepath, 'rb') as f:
-                            while file_sent < filesize:
-                                if self._cancel_folder_transfer:
-                                    raise Exception("傳輸已取消")
 
-                                chunk = f.read(FILE_CHUNK_SIZE)
-                                if not chunk:
-                                    break
-                                sock.sendall(chunk)
-                                file_sent += len(chunk)
+                        # 等待檔案傳輸確認
+                        response = self._recv_response(sock)
+                        if response != RESP_ACK_STRIPPED:
+                            raise Exception(f"傳輸確認失敗: {response}")
 
-                                # 更新進度
-                                file_progress = (file_sent / filesize) * 100 if filesize > 0 else 100
-                                overall_progress = ((sent_size + file_sent) / total_size) * 100 if total_size > 0 else 100
+                        sent_size += filesize
+                        completed_files.add(rel_path)
+                        success_count += 1
 
-                                # 計算速度和剩餘時間
-                                elapsed = time.time() - transfer_start_time
-                                total_sent_now = sent_size + file_sent
-                                speed = total_sent_now / elapsed if elapsed > 0 else 0
-                                remaining_bytes = total_size - total_sent_now
-                                remaining_time = remaining_bytes / speed if speed > 0 else 0
-                                speed_mb = speed / (1024 * 1024)
-                                time_str = self._format_time(remaining_time)
+                        # 更新進度為完成
+                        overall_progress = (sent_size / total_size) * 100 if total_size > 0 else 100
+                        if self.on_folder_progress:
+                            self.on_folder_progress(idx + 1, total_files, rel_path, 100, overall_progress, "completed")
 
-                                if self.on_folder_progress:
-                                    self.on_folder_progress(idx + 1, total_files, rel_path, file_progress, overall_progress, "sending")
-
-                                if self.on_progress:
-                                    self.on_progress(overall_progress, f"({idx + 1}/{total_files}) {rel_path} ({speed_mb:.1f} MB/s, {time_str})")
-
-                    # 等待檔案傳輸確認
-                    response = self._recv_response(sock)
-                    if response != RESP_ACK_STRIPPED:
-                        raise Exception(f"檔案 {rel_path} 傳輸確認失敗: {response}")
-
-                    sent_size += filesize
-                    completed_files.add(rel_path)
-
-                    # 更新進度為完成
-                    overall_progress = (sent_size / total_size) * 100 if total_size > 0 else 100
-                    if self.on_folder_progress:
-                        self.on_folder_progress(idx + 1, total_files, rel_path, 100, overall_progress, "completed")
+                    except Exception as file_error:
+                        # LocalSend 風格：單檔失敗不中斷整體傳輸
+                        self._log(f"檔案傳輸失敗 (跳過): {rel_path} - {file_error}")
+                        failed_files.append(rel_path)
+                        sent_size += filesize  # 仍計入進度
+                        overall_progress = (sent_size / total_size) * 100 if total_size > 0 else 100
+                        if self.on_folder_progress:
+                            self.on_folder_progress(idx + 1, total_files, rel_path, 0, overall_progress, "error")
+                        continue
 
                 # 發送 FOLDER_END
                 end_header = {
                     "type": MSG_TYPE_FOLDER_END,
                     "folder_name": folder_name,
-                    "total_sent": len(completed_files)
+                    "total_sent": success_count,
+                    "total_failed": len(failed_files)
                 }
                 end_header_json = json.dumps(end_header).encode('utf-8')
                 sock.send(len(end_header_json).to_bytes(4, 'big'))
@@ -743,9 +804,15 @@ class TransferClient:
                 sock.close()
 
                 if response == RESP_ACK_STRIPPED:
-                    self._log(f"資料夾傳輸完成: {folder_name}")
-                    if self.on_complete:
-                        self.on_complete(True, f"資料夾 {folder_name} 發送成功 ({total_files} 檔案)")
+                    # LocalSend 風格：區分完全成功和部分成功
+                    if failed_files:
+                        self._log(f"資料夾傳輸完成 (部分成功): {folder_name} - {success_count}/{total_files} 檔案")
+                        if self.on_complete:
+                            self.on_complete(True, f"資料夾 {folder_name} 發送完成 ({success_count}/{total_files} 檔案，{len(failed_files)} 個失敗)")
+                    else:
+                        self._log(f"資料夾傳輸完成: {folder_name}")
+                        if self.on_complete:
+                            self.on_complete(True, f"資料夾 {folder_name} 發送成功 ({total_files} 檔案)")
                     return True
                 else:
                     raise Exception(f"FOLDER_END 未收到確認: {response}")

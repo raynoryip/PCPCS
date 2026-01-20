@@ -199,6 +199,12 @@ LANG = {
         "macos_step1": "系統偏好設定 → 安全性與隱私 → 防火牆",
         "macos_step2": "允許 Python 接受傳入連接",
         "version": "版本",
+        "transfer_error": "傳輸錯誤",
+        "transfer_failed_reset": "傳輸失敗，已自動重置",
+        "skipped_files": "已跳過 {count} 個無法讀取的檔案",
+        "retry_transfer": "重試",
+        "transfer_partial_success": "傳輸完成（部分成功）: {success}/{total} 檔案",
+        "file_error_skipped": "檔案錯誤，已跳過: {name}",
     },
     "en": {
         "window_title": "PCPCS",
@@ -354,6 +360,12 @@ LANG = {
         "macos_step1": "System Preferences → Security & Privacy → Firewall",
         "macos_step2": "Allow Python to accept incoming connections",
         "version": "Version",
+        "transfer_error": "Transfer Error",
+        "transfer_failed_reset": "Transfer failed, auto-reset",
+        "skipped_files": "Skipped {count} unreadable files",
+        "retry_transfer": "Retry",
+        "transfer_partial_success": "Transfer complete (partial): {success}/{total} files",
+        "file_error_skipped": "File error, skipped: {name}",
     }
 }
 
@@ -1974,8 +1986,15 @@ class PCPCSApp:
         file_count = 0
         for root, dirs, files in os.walk(folder_path):
             for f in files:
-                total_size += os.path.getsize(os.path.join(root, f))
-                file_count += 1
+                file_path = os.path.join(root, f)
+                # 跳過損壞的符號連結
+                if os.path.exists(file_path):
+                    try:
+                        total_size += os.path.getsize(file_path)
+                        file_count += 1
+                    except (OSError, IOError):
+                        # 跳過無法讀取的檔案
+                        pass
 
         if file_count == 0:
             messagebox.showwarning(self._t("hint"), self._t("folder_empty"))
@@ -1999,21 +2018,48 @@ class PCPCSApp:
         self.client.send_folder(self.selected_peer_ip, folder_path)
 
     def _cancel_transfer(self):
-        """取消傳輸 (檔案或資料夾)"""
+        """取消傳輸 (檔案或資料夾) - 參考 LocalSend：取消後自動重置"""
         self.client.cancel_folder_transfer()  # 這個方法也會取消並行傳輸
         self._log(self._t("transfer_cancelled"))
-        # 顯示重置按鈕
+
+        # 自動重置 UI 狀態（LocalSend 風格）
         self.cancel_btn.pack_forget()
-        self.reset_btn.pack(side=tk.RIGHT)
+        self.reset_btn.pack_forget()
+
+        # 顯示取消狀態
+        self.progress_var.set(0)
+        self.progress_label.config(text=f"⚠️ {self._t('transfer_cancelled')}")
+
+        # 重置按鈕狀態
+        self.send_file_btn.config(state='normal')
+        self.send_folder_btn.config(state='normal')
+        self.send_btn.config(state='normal')
+
+        # 重置傳輸狀態
+        self.folder_transfer_active = False
+        self._current_folder_path = None
+        self._current_folder_files = 0
+        self.transfer_start_time = None
+        self.transfer_size = 0
+
+        # 3 秒後自動清除取消訊息
+        def clear_cancelled():
+            if "⚠️" in self.progress_label.cget("text"):
+                self.progress_label.config(text="")
+        self.root.after(3000, clear_cancelled)
 
     def _reset_progress(self):
-        """重置進度條"""
+        """手動重置進度條（保留給特殊情況）"""
         self.progress_var.set(0)
         self.progress_label.config(text="")
         self.reset_btn.pack_forget()
+        self.cancel_btn.pack_forget()
         self.send_file_btn.config(state='normal')
         self.send_folder_btn.config(state='normal')
+        self.send_btn.config(state='normal')
         self.folder_transfer_active = False
+        self._current_folder_path = None
+        self._current_folder_files = 0
         self.transfer_start_time = None
         self.transfer_size = 0
 
@@ -2037,12 +2083,14 @@ class PCPCSApp:
         """更新資料夾傳輸進度顯示"""
         self.progress_var.set(overall_progress)
 
-        # 狀態圖示
+        # 狀態圖示（LocalSend 風格）
         status_icon = ""
         if status == "completed":
             status_icon = "✓ "
         elif status == "skipped":
             status_icon = "⊘ "
+        elif status == "error":
+            status_icon = "✗ "  # 錯誤標記
         elif status == "sending" or status == "receiving":
             status_icon = "↑ " if direction == "send" else "↓ "
 
@@ -2065,6 +2113,8 @@ class PCPCSApp:
         progress_text = f"{status_icon}({current}/{total}) {filename}"
         if status in ["sending", "receiving"]:
             progress_text += f" [{file_progress:.0f}%]"
+        elif status == "error":
+            progress_text += " [跳過]"
         progress_text += f" - {overall_progress:.1f}%{speed_str}{eta_str}"
 
         self.progress_label.config(text=progress_text)
@@ -2103,7 +2153,6 @@ class PCPCSApp:
         self.send_folder_btn.config(state='normal')
         self.cancel_btn.pack_forget()  # 隱藏取消按鈕
         self.reset_btn.pack_forget()   # 隱藏重置按鈕
-        self.progress_var.set(100 if success else 0)
 
         speed_str = ""
         if self.transfer_start_time and self.transfer_size > 0 and success:
@@ -2112,9 +2161,9 @@ class PCPCSApp:
                 speed = self.transfer_size / elapsed
                 speed_str = f"{self._format_size(speed)}/s"
 
-        self.progress_label.config(text=message)
-
         if success:
+            self.progress_var.set(100)
+            self.progress_label.config(text=message)
             self._log(f"{self._t('send_success')} {speed_str}")
 
             # 資料夾傳輸完成
@@ -2138,8 +2187,23 @@ class PCPCSApp:
                         file_info={"size": self.transfer_size, "speed": speed_str}
                     )
         else:
+            # 傳輸失敗 - 自動重置 UI 狀態（參考 LocalSend 設計）
+            self.progress_var.set(0)
+            # 顯示錯誤訊息（紅色標示）
+            error_msg = f"❌ {self._t('transfer_error')}: {message}"
+            self.progress_label.config(text=error_msg)
             self._log(self._t("send_fail", msg=message))
+
+            # 完全重置傳輸狀態
             self.folder_transfer_active = False
+            self._current_folder_path = None
+            self._current_folder_files = 0
+
+            # 3 秒後自動清除錯誤訊息
+            def clear_error():
+                if "❌" in self.progress_label.cget("text"):
+                    self.progress_label.config(text="")
+            self.root.after(5000, clear_error)
 
         self.transfer_start_time = None
         self.transfer_size = 0
